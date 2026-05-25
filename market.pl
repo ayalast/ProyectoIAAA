@@ -2,10 +2,14 @@
 use strict;
 use warnings;
 use Data::Dumper; # Librería nativa para imprimir arreglos de forma legible
+use Tk;
 
 # Añade el directorio actual a las rutas de búsqueda de librerías
 use lib '.';
 use Market::MarketData;
+use Market::IndicatorManager;
+use Market::Indicators::ATR;
+use Market::ChartEngine;
 
 print "========== INICIANDO MOTOR DE DATOS ==========\n";
 
