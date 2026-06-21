@@ -4,6 +4,19 @@ Clasificada por severidad. No se resuelve aquí; solo se documenta. Última act.
 
 ## Crítico
 
+### La app se cuelga al abrir con el dataset real (29888 velas) — task 0016 abierta
+- **Descripción:** el primer `render()` alimenta Liquidity sobre las 29888 velas;
+  `_sum_volume_for_tf` (task 0013) recorre el array completo del TF parseando `Time::Moment` por
+  vela, por cada evento resuelto y cada TF → ~16 ms/vela → ~6-7 min de cuelgue síncrono. La ventana
+  abre pero el gráfico queda en blanco. Secundario: `_active_levels` no poda los `Resolved` (O(n²)).
+- **Perfilado:** `_sum_volume_for_tf` = 96% del tiempo (1086 llamadas en 2000 velas, 37s).
+- **Impacto:** BLOQUEA la ejecución de la 1ª entrega. Los 654 tests pasan porque usan 10-35 velas.
+- **Evidencia:** medición del arquitecto (perf_probe/prof_vol); log de la app para en
+  "Render geometry ... bars=60".
+- **Recomendación:** task `0016-liquidity-performance-fix.md` (cache de epochs + prefix-sum +
+  búsqueda binaria; podar niveles Resolved). Resolver ANTES de cualquier validación visual.
+- **¿Bloquea?:** sí, totalmente. Máxima prioridad.
+
 ### [RESUELTO 2026-06-21] Indicadores se alimentaban hasta el fin del dataset en Replay — task 0015
 - **Era:** `ChartEngine::render` alimentaba SMC/Liquidity hasta `size()-1` aunque Replay estuviera
   activo, filtrando solo el dibujo → fuga de futuro (FVG mitigado por velas futuras, pivotes
