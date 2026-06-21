@@ -13,6 +13,7 @@ use_ok('Market::Panels::Scales');
 use_ok('Market::ChartEngine');
 use_ok('Market::Panels::PricePanel');
 use_ok('Market::Panels::ATRPanel');
+use_ok('Market::UI::Callbacks');
 
 my @syntax_files = qw(
     market.pl
@@ -25,6 +26,7 @@ my @syntax_files = qw(
     Market/ChartEngine.pm
     Market/Panels/PricePanel.pm
     Market/Panels/ATRPanel.pm
+    Market/UI/Callbacks.pm
 );
 
 for my $file (@syntax_files) {
