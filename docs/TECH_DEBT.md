@@ -53,17 +53,16 @@ Clasificada por severidad. No se resuelve aquí; solo se documenta. Última act.
   tiene tres simplificaciones deliberadas a vigilar:
   1. **Mitigación FVG unidireccional:** `FVG_up` solo recorta `hi` (penetración desde arriba);
      no modela entrada por debajo. TradingView mitiga bidireccional.
-  2. **`get_pivots()` muta estado** al confirmar `_current`/`_trailing` provisionales (los demás
-     getters lo invocan, así que cualquier consulta corrompe la FSM en uso interactivo/Replay).
-     **→ task 0014 abierta** (getters no-mutantes/idempotentes). Bloquea 0008; resolver primero.
+  2. **[RESUELTO 0014]** `get_pivots()` mutaba estado al confirmar `_current`/`_trailing`. Corregido:
+     `_label_for` puro + `get_pivots`/`_get_effective_majors` materializan la cola provisional con
+     copias locales, sin tocar `$self`. Idempotencia verificada (consultar getters tras cada vela ==
+     no consultar). 488/488 PASS; el test de idempotencia falla con el código viejo.
    3. **`CHoCH_false` no verifica cierre de cuerpo** (compara solo `close` vs nivel interno, no
      `close` vs `open`), a diferencia de BOS.
-- **Impacto:** punto 2 BLOQUEA el overlay SMC (0008) y la integración con Replay → task 0014.
-  Puntos 1 y 3: precisión visual vs LuxAlgo, a 2ª entrega.
-- **Evidencia:** `Market/Indicators/SMC_Structures.pm`, `t/09-smc-structures.t`.
-- **Recomendación:** ejecutar `tasks/0014-smc-non-mutating-getters.md` antes de 0008. Mitigación
-  bidireccional y body-close en CHoCH_false en 2ª entrega.
-- **¿Bloquea escalabilidad?:** punto 2 sí (bloquea 0008), resuelto en 0014; puntos 1/3 no.
+- **Impacto:** punto 2 RESUELTO (desbloquea 0008). Puntos 1 y 3: precisión visual vs LuxAlgo, a 2ª entrega.
+- **Evidencia:** `Market/Indicators/SMC_Structures.pm`, `t/09-smc-structures.t` (bloque TASK 0014).
+- **Recomendación:** mitigación FVG bidireccional y body-close en CHoCH_false en 2ª entrega.
+- **¿Bloquea escalabilidad?:** ya no; punto 2 resuelto en 0014, puntos 1/3 no bloquean.
 
 ### Tests automatizados — establecidos (entrada previa obsoleta)
 - **Descripción:** Ya existe suite `t/00`–`t/13` con Test::More (317 tests al cierre de 0007),

@@ -177,17 +177,38 @@ sub _process_swing {
     return;
 }
 
-sub _confirm_pivot {
-    my ($self, $cand) = @_;
+sub _label_for {
+    my ($cand, $last_high, $last_low) = @_;
     my $label;
+    my $new_lh = $last_high;
+    my $new_ll = $last_low;
+
     if ($cand->{type} eq 'high') {
-        if (!defined $self->{_last_high} || $cand->{price} > $self->{_last_high}) {
+        if (!defined $last_high || $cand->{price} > $last_high) {
             $label = 'HH';
         } else {
             $label = 'LH';
         }
-        $self->{_last_high} = $cand->{price};
+        $new_lh = $cand->{price};
+    } else {
+        if (!defined $last_low || $cand->{price} < $last_low) {
+            $label = 'LL';
+        } else {
+            $label = 'HL';
+        }
+        $new_ll = $cand->{price};
+    }
+    return ($label, $new_lh, $new_ll);
+}
 
+sub _confirm_pivot {
+    my ($self, $cand) = @_;
+    my ($label, $new_lh, $new_ll) = _label_for($cand, $self->{_last_high}, $self->{_last_low});
+    
+    $self->{_last_high} = $new_lh;
+    $self->{_last_low}  = $new_ll;
+
+    if ($cand->{type} eq 'high') {
         if ($label eq 'HH') {
             $self->{_last_hh} = { index => $cand->{index}, price => $cand->{price} };
             if (!defined $self->{_major_high} || $cand->{price} > $self->{_major_high}->{price}) {
@@ -197,13 +218,6 @@ sub _confirm_pivot {
             $self->{_last_lh} = { index => $cand->{index}, price => $cand->{price} };
         }
     } else {
-        if (!defined $self->{_last_low} || $cand->{price} < $self->{_last_low}) {
-            $label = 'LL';
-        } else {
-            $label = 'HL';
-        }
-        $self->{_last_low} = $cand->{price};
-
         if ($label eq 'LL') {
             $self->{_last_ll} = { index => $cand->{index}, price => $cand->{price} };
             if (!defined $self->{_major_low} || $cand->{price} < $self->{_major_low}->{price}) {
@@ -458,43 +472,101 @@ sub _detect_and_mitigate_fvgs {
 # Public API
 # =============================================================================
 
-sub get_pivots {
+sub _get_effective_majors {
     my ($self) = @_;
+    my $major_high = $self->{_major_high};
+    my $major_low  = $self->{_major_low};
+
+    my $lh = $self->{_last_high};
+    my $ll = $self->{_last_low};
+
     if (defined $self->{_current}) {
-        $self->_confirm_pivot($self->{_current});
-        $self->{_current} = undef;
+        my $cand = $self->{_current};
+        my ($label, $new_lh, $new_ll) = _label_for($cand, $lh, $ll);
+        $lh = $new_lh;
+        $ll = $new_ll;
+
+        if ($cand->{type} eq 'high') {
+            if ($label eq 'HH') {
+                if (!defined $major_high || $cand->{price} > $major_high->{price}) {
+                    $major_high = { index => $cand->{index}, price => $cand->{price} };
+                }
+            }
+        } else {
+            if ($label eq 'LL') {
+                if (!defined $major_low || $cand->{price} < $major_low->{price}) {
+                    $major_low = { index => $cand->{index}, price => $cand->{price} };
+                }
+            }
+        }
     }
     if (defined $self->{_trailing}) {
-        $self->_confirm_pivot($self->{_trailing});
-        $self->{_trailing} = undef;
+        my $cand = $self->{_trailing};
+        my ($label, $new_lh, $new_ll) = _label_for($cand, $lh, $ll);
+        $lh = $new_lh;
+        $ll = $new_ll;
+
+        if ($cand->{type} eq 'high') {
+            if ($label eq 'HH') {
+                if (!defined $major_high || $cand->{price} > $major_high->{price}) {
+                    $major_high = { index => $cand->{index}, price => $cand->{price} };
+                }
+            }
+        } else {
+            if ($label eq 'LL') {
+                if (!defined $major_low || $cand->{price} < $major_low->{price}) {
+                    $major_low = { index => $cand->{index}, price => $cand->{price} };
+                }
+            }
+        }
     }
-    return $self->{_pivots};
+    return ($major_high, $major_low);
+}
+
+sub get_pivots {
+    my ($self) = @_;
+    my @pivs = @{ $self->{_pivots} };
+
+    my $lh = $self->{_last_high};
+    my $ll = $self->{_last_low};
+
+    if (defined $self->{_current}) {
+        my $cand = $self->{_current};
+        my ($label, $new_lh, $new_ll) = _label_for($cand, $lh, $ll);
+        $lh = $new_lh;
+        $ll = $new_ll;
+        push @pivs, { index => $cand->{index}, type => $label, price => $cand->{price} };
+    }
+    if (defined $self->{_trailing}) {
+        my $cand = $self->{_trailing};
+        my ($label, $new_lh, $new_ll) = _label_for($cand, $lh, $ll);
+        $lh = $new_lh;
+        $ll = $new_ll;
+        push @pivs, { index => $cand->{index}, type => $label, price => $cand->{price} };
+    }
+    return \@pivs;
 }
 
 sub get_events {
     my ($self) = @_;
-    $self->get_pivots();
-    $self->{_pending_bos}   = undef;
-    $self->{_pending_choch} = undef;
     return $self->{_events};
 }
 
 sub get_major {
     my ($self) = @_;
-    $self->get_pivots();
+    my ($mh, $ml) = $self->_get_effective_majors();
     my @items;
-    if (defined $self->{_major_high}) {
-        push @items, { index => $self->{_major_high}->{index}, type => 'major_high', price => $self->{_major_high}->{price} };
+    if (defined $mh) {
+        push @items, { index => $mh->{index}, type => 'major_high', price => $mh->{price} };
     }
-    if (defined $self->{_major_low}) {
-        push @items, { index => $self->{_major_low}->{index}, type => 'major_low', price => $self->{_major_low}->{price} };
+    if (defined $ml) {
+        push @items, { index => $ml->{index}, type => 'major_low', price => $ml->{price} };
     }
     return \@items;
 }
 
 sub get_fvg {
     my ($self) = @_;
-    $self->get_pivots();
     my @result;
     for my $fvg ( @{ $self->{_fvgs} } ) {
         next unless $fvg->{_active};
@@ -511,9 +583,7 @@ sub get_fvg {
 
 sub get_fibonacci {
     my ($self) = @_;
-    $self->get_pivots();
-    my $mh = $self->{_major_high};
-    my $ml = $self->{_major_low};
+    my ($mh, $ml) = $self->_get_effective_majors();
     return [] unless defined $mh && defined $ml;
 
     my $range = $mh->{price} - $ml->{price};
@@ -544,8 +614,26 @@ sub get_all_items {
 
 sub get_values {
     my ($self) = @_;
-    $self->get_pivots();
-    return $self->{_values};
+    my @vals = @{ $self->{_values} };
+
+    my $lh = $self->{_last_high};
+    my $ll = $self->{_last_low};
+
+    if (defined $self->{_current}) {
+        my $cand = $self->{_current};
+        my ($label, $new_lh, $new_ll) = _label_for($cand, $lh, $ll);
+        $lh = $new_lh;
+        $ll = $new_ll;
+        $vals[ $cand->{index} ] = $label;
+    }
+    if (defined $self->{_trailing}) {
+        my $cand = $self->{_trailing};
+        my ($label, $new_lh, $new_ll) = _label_for($cand, $lh, $ll);
+        $lh = $new_lh;
+        $ll = $new_ll;
+        $vals[ $cand->{index} ] = $label;
+    }
+    return \@vals;
 }
 
 sub reset {

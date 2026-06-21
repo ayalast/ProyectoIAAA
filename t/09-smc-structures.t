@@ -557,4 +557,97 @@ sub events_of_type {
     }
 }
 
+# =============================================================================
+# TASK 0014: Idempotency and Non-mutating Getters Validation
+# =============================================================================
+{
+    # 1. Idempotencia simple: llamar get_pivots() dos veces seguidas devuelve lo mismo
+    # y no altera una tercera llamada.
+    my $md = build_fixture();
+    my $smc = Market::Indicators::SMC_Structures->new(k => 1);
+    $smc->update_last($md, $_) for 0 .. $md->last_index;
+
+    my $piv1 = $smc->get_pivots();
+    my $piv2 = $smc->get_pivots();
+    my $piv3 = $smc->get_pivots();
+
+    is(scalar(@$piv1), scalar(@$piv2), 'Idempotencia simple: get_pivots 1 y 2 tienen la misma cantidad');
+    is(scalar(@$piv1), scalar(@$piv3), 'Idempotencia simple: get_pivots 1 y 3 tienen la misma cantidad');
+
+    for my $i (0 .. $#$piv1) {
+        is($piv1->[$i]->{index}, $piv2->[$i]->{index}, "Idempotencia simple (1vs2): pivot $i index");
+        is($piv1->[$i]->{type},  $piv2->[$i]->{type},  "Idempotencia simple (1vs2): pivot $i type");
+        is($piv1->[$i]->{price}, $piv2->[$i]->{price}, "Idempotencia simple (1vs2): pivot $i price");
+
+        is($piv1->[$i]->{index}, $piv3->[$i]->{index}, "Idempotencia simple (1vs3): pivot $i index");
+        is($piv1->[$i]->{type},  $piv3->[$i]->{type},  "Idempotencia simple (1vs3): pivot $i type");
+        is($piv1->[$i]->{price}, $piv3->[$i]->{price}, "Idempotencia simple (1vs3): pivot $i price");
+    }
+
+    # 2. Idempotencia de lectura (Caso A vs Caso B)
+    # Caso A: Alimentar y leer solo al final.
+    my $smc_a = Market::Indicators::SMC_Structures->new(k => 1);
+    $smc_a->update_last($md, $_) for 0 .. $md->last_index;
+    my $pivs_a   = $smc_a->get_pivots();
+    my $events_a = $smc_a->get_events();
+    my $fvgs_a   = $smc_a->get_fvg();
+    my $major_a  = $smc_a->get_major();
+    my $fibs_a   = $smc_a->get_fibonacci();
+
+    # Caso B: Alimentar llamando a los getters tras CADA update_last (intermedio).
+    my $smc_b = Market::Indicators::SMC_Structures->new(k => 1);
+    for my $i (0 .. $md->last_index) {
+        $smc_b->update_last($md, $i);
+        # Llamadas intermedias e idempotentes:
+        $smc_b->get_pivots();
+        $smc_b->get_events();
+        $smc_b->get_major();
+        $smc_b->get_fvg();
+        $smc_b->get_fibonacci();
+    }
+    # Consultas finales para comparar
+    my $pivs_b   = $smc_b->get_pivots();
+    my $events_b = $smc_b->get_events();
+    my $fvgs_b   = $smc_b->get_fvg();
+    my $major_b  = $smc_b->get_major();
+    my $fibs_b   = $smc_b->get_fibonacci();
+
+    # Comparaciones final de A y B (deben ser completamente idénticos)
+    is(scalar(@$pivs_a), scalar(@$pivs_b), 'Idempotencia lectura: misma cantidad de pivots final');
+    for my $i (0 .. $#$pivs_a) {
+        is($pivs_b->[$i]->{index}, $pivs_a->[$i]->{index}, "Idempotencia lectura: pivot $i index coincide");
+        is($pivs_b->[$i]->{type},  $pivs_a->[$i]->{type},  "Idempotencia lectura: pivot $i type coincide");
+        is($pivs_b->[$i]->{price}, $pivs_a->[$i]->{price}, "Idempotencia lectura: pivot $i price coincide");
+    }
+
+    is(scalar(@$events_a), scalar(@$events_b), 'Idempotencia lectura: misma cantidad de eventos final');
+    for my $i (0 .. $#$events_a) {
+        is($events_b->[$i]->{index}, $events_a->[$i]->{index}, "Idempotencia lectura: evento $i index coincide");
+        is($events_b->[$i]->{type},  $events_a->[$i]->{type},  "Idempotencia lectura: evento $i type coincide");
+        is($events_b->[$i]->{price}, $events_a->[$i]->{price}, "Idempotencia lectura: evento $i price coincide");
+    }
+
+    is(scalar(@$fvgs_a), scalar(@$fvgs_b), 'Idempotencia lectura: misma cantidad de FVGs final');
+    for my $i (0 .. $#$fvgs_a) {
+        is($fvgs_b->[$i]->{index}, $fvgs_a->[$i]->{index}, "Idempotencia lectura: FVG $i index coincide");
+        is($fvgs_b->[$i]->{type},  $fvgs_a->[$i]->{type},  "Idempotencia lectura: FVG $i type coincide");
+        is($fvgs_b->[$i]->{hi},    $fvgs_a->[$i]->{hi},    "Idempotencia lectura: FVG $i hi coincide");
+        is($fvgs_b->[$i]->{lo},    $fvgs_a->[$i]->{lo},    "Idempotencia lectura: FVG $i lo coincide");
+    }
+
+    is(scalar(@$major_a), scalar(@$major_b), 'Idempotencia lectura: misma cantidad de major levels final');
+    for my $i (0 .. $#$major_a) {
+        is($major_b->[$i]->{index}, $major_a->[$i]->{index}, "Idempotencia lectura: major $i index coincide");
+        is($major_b->[$i]->{type},  $major_a->[$i]->{type},  "Idempotencia lectura: major $i type coincide");
+        is($major_b->[$i]->{price}, $major_a->[$i]->{price}, "Idempotencia lectura: major $i price coincide");
+    }
+
+    is(scalar(@$fibs_a), scalar(@$fibs_b), 'Idempotencia lectura: misma cantidad de Fibonacci levels final');
+    for my $i (0 .. $#$fibs_a) {
+        is($fibs_b->[$i]->{index}, $fibs_a->[$i]->{index}, "Idempotencia lectura: fibonacci $i index coincide");
+        is($fibs_b->[$i]->{type},  $fibs_a->[$i]->{type},  "Idempotencia lectura: fibonacci $i type coincide");
+        is($fibs_b->[$i]->{price}, $fibs_a->[$i]->{price}, "Idempotencia lectura: fibonacci $i price coincide");
+    }
+}
+
 done_testing();
