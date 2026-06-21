@@ -53,18 +53,17 @@ Clasificada por severidad. No se resuelve aquí; solo se documenta. Última act.
   tiene tres simplificaciones deliberadas a vigilar:
   1. **Mitigación FVG unidireccional:** `FVG_up` solo recorta `hi` (penetración desde arriba);
      no modela entrada por debajo. TradingView mitiga bidireccional.
-  2. **`get_pivots()` muta estado** al confirmar `_current`/`_trailing` provisionales. Como
-     `get_events/major/fvg/fibonacci` lo invocan primero, el orden/momento de llamada puede afectar
-     resultados en uso interactivo (Replay). Los tests usan `reset`+recálculo, así que no lo exponen.
-  3. **`CHoCH_false` no verifica cierre de cuerpo** (compara solo `close` vs nivel interno, no
+  2. **`get_pivots()` muta estado** al confirmar `_current`/`_trailing` provisionales (los demás
+     getters lo invocan, así que cualquier consulta corrompe la FSM en uso interactivo/Replay).
+     **→ task 0014 abierta** (getters no-mutantes/idempotentes). Bloquea 0008; resolver primero.
+   3. **`CHoCH_false` no verifica cierre de cuerpo** (compara solo `close` vs nivel interno, no
      `close` vs `open`), a diferencia de BOS.
-- **Impacto:** suficiente para la 1ª entrega (29/06). Riesgo al integrar con Replay (0008) por el
-  punto 2; precisión visual vs LuxAlgo por el punto 1.
+- **Impacto:** punto 2 BLOQUEA el overlay SMC (0008) y la integración con Replay → task 0014.
+  Puntos 1 y 3: precisión visual vs LuxAlgo, a 2ª entrega.
 - **Evidencia:** `Market/Indicators/SMC_Structures.pm`, `t/09-smc-structures.t`.
-- **Recomendación:** al integrar el overlay 0008 con Replay, verificar que llamar `get_*` repetidas
-  veces a distintos `replay_idx` no acumule pivotes provisionales mal; considerar un método de
-  lectura no-mutante. Mitigación bidireccional y body-close en CHoCH_false en 2ª entrega.
-- **¿Bloquea escalabilidad?:** no para 1ª entrega; vigilar punto 2 en 0008.
+- **Recomendación:** ejecutar `tasks/0014-smc-non-mutating-getters.md` antes de 0008. Mitigación
+  bidireccional y body-close en CHoCH_false en 2ª entrega.
+- **¿Bloquea escalabilidad?:** punto 2 sí (bloquea 0008), resuelto en 0014; puntos 1/3 no.
 
 ### Tests automatizados — establecidos (entrada previa obsoleta)
 - **Descripción:** Ya existe suite `t/00`–`t/13` con Test::More (317 tests al cierre de 0007),
