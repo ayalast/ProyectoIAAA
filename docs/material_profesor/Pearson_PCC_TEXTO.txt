@@ -1,0 +1,253 @@
+Pearson Correlation Coefficients (PCC)
+https://byjus.com/maths/correlation/ (https://byjus.com/maths/correlation/)https://towardsdatascience.com/a-step-by-step-implementation-of-principal-component-analysis-5520cc6cd598 (https://towardsdatascience.com/a-step-by-step-implementation-of-principal-component-analysis-5520cc6cd598)https://github.com/AdityaDutt/PCATutorial/blob/main/PCA_tutorial.ipynb (https://github.com/AdityaDutt/PCATutorial/blob/main/PCA_tutorial.ipynb)https://github.com/patrickloeber/MLfromscratch/blob/master/mlfromscratch/pca.py (https://github.com/patrickloeber/MLfromscratch/blob/master/mlfromscratch/pca.py)https://kozodoi.me/blog/20230326/pca-from-scratch (https://kozodoi.me/blog/20230326/pca-from-scratch)
+Statistics and data science are often concerned about the relationships between two or more variables (or features) of a dataset. Each data point in the dataset is an observation, and the features are the properties or attributes of those observations.
+Every dataset you work with uses variables and observations. For example, you might be interested in understanding the following:
+How the height of basketball players is correlated to their shooting accuracy Whether there’s a relationship between employee work experience and salary What mathematical dependence exists between the population density and the gross domestic product of difaccuracy, years of experience, salary, population density, and gross domestic product are the features or variables. The data related to each player, employee, and each country are the observations.
+When data is represented in the form of a table, the rows of that table are usually the observations, while the columns are the features. Take a look at this employee table:
+Name Years of Experience Annual SalaryAnn 30 120,000Rob 21 105,000Tom 19 90,000Ivy 10 82,000
+In this table, each row represents one observation, or the data about one employee (either Ann, Rob, Tom, or Ivy). Each column shows one property or feature (name, experience, or salary) for all the employees.
+If you analyze any two features of a dataset, then you’ll find some type of correlation between those two features. Consider the following figures:
+Each of these plots shows one of three different forms of correlation:
+Negative correlation (red dots): In the plot on the left, the y values tend to decrease as the x values increase. This shows strong negative correlation, which occurs when large values of one feature correspond to small values of the other, and vice versa.
+Weak or no correlation (green dots): The plot in the middle shows no obvious trend. This is a form of weak correlation, which occurs when an association between two features is not obvious or is hardly observable.
+Positive correlation (blue dots): In the plot on the right, the y values tend to increase as the x values increase. This illustrates strong positive correlation, which occurs when large values of one feature correspond to large values of the other, and vice versa.
+The next figure represents the data from the employee table above:
+
+The correlation between experience and salary is positive because higher experience corresponds to a larger salary and vice versa.
+Note: When you’re analyzing correlation, you should always have in mind that correlation does not indicate causation. It quantifies the strength of the relationship between the features of a dataset. Sometimes, the association is caused by a factor common to sever
+Another example of correlation can be seen in the image below:
+Step 2: Understanding Correlation
+In [1]:use strict;use warnings;use Data::Dump qw(dump);use AI::MXNet qw(mx);use sml;
+12345
+In [2]:
+Step 1: Fetch the data from a dataset
+We obtain data from Iris Dataset, which has 4 columns. We use the function previously defined in the book.
+In [3]:
+In [4]:
+In [5]:
+In [6]:
+In [7]:
+In [8]:
+In [9]:
+Out[3]:<AI::MXNet::NDArray 150x5 @cpu(0)>
+0-SepalLengthCm 1-SepalWidthCm 2-PetalLengthCm 3-PetalWidthCm 4-Species ( { "Iris-setosa" => 0, "Iris-versicolor" => 1, "Iris-virginica" => 2 }, { "0" => "Iris-setosa", "1" => "Iris-versicolor", "2" => "Iris-virginica" },)
+Out[4]:1
+[[5.1000 3.5000 1.4000 0.2000      0][4.9000      3 1.4000 0.2000      0][4.7000 3.2000 1.3000 0.2000      0][4.6000 3.1000 1.5000 0.2000      0][     5 3.6000 1.4000 0.2000      0]]Out[5]:1
+0-SepalLengthCm 1-SepalWidthCm 2-PetalLengthCm 3-PetalWidthCm [[5.1000 3.5000 1.4000 0.2000][4.9000      3 1.4000 0.2000][4.7000 3.2000 1.3000 0.2000][4.6000 3.1000 1.5000 0.2000][     5 3.6000 1.4000 0.2000]]
+Out[6]:1
+y: [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2]Out[7]:1
+Mean: [5.8433 3.0540 3.7587 1.1987]Deviaton: [0.8253 0.4321 1.7585 0.7606]Out[8]:1
+Out[9]:<AI::MXNet::NDArray 150 @cpu(0)>
+# Para plotear las gráficas, debe cargar las siguientes librerías:use Chart::Plotly;use Chart::Plotly::Plot;use Chart::Plotly::Trace::Scatter;use Chart::Plotly::Trace::Heatmap;IPerl->load_plugin('Chart::Plotly'); # (Jupyter) / Comentar si ejecuta desde IDE.# use Chart::Plotly qw(show_plot); # Cuando si ejecuta desde IDE: # show_plot($plot); # ejemplo: https://metacpan.org/pod/Chart::Plotly
+my ($dataset, $header) = sml->load_csv('../data/iris.csv');my ($lookup, $rlookup) = sml->str_column_to_int($dataset, -1);$dataset = mx->nd->array($dataset);
+printf "%d-%s ", $_, $header->[$_] for (0 .. $#$header);printf "%s\n", dump $lookup, $rlookup;
+print $dataset->slice([0, 5])->asstr;
+my $X = $dataset->slice(':', [undef, -1]);printf "%d-%s ", $_, $header->[$_] for (0 .. $#$header -1);print $X->slice([undef, 5])->asstr;
+my $y = $dataset->slice(':', -1);printf "y: %s", $y->asstr;
+printf "Mean: %s\n", mx->nd->mean($X, axis=>0)->asstr;printf "Deviaton: %s\n", mx->nd->std($X, axis=>0)->asstr;# Mean: [5.84333   3.054 3.75867 1.19867]# Deviaton: [0.825301 0.432147 1.75853 0.760613]
+# Now, we take any two columns from the dataset, calculate their correlation we plot their points in two dimensions.my $X0 = $X->slice(':', 0);my $X1 = $X->slice(':', 1);my $X2 = $X->slice(':', 2);my $X3 = $X->slice(':', 3);
+12345678
+123
+12
+1
+123
+12
+1234
+12345
+In [10]:
+In [11]:
+In [12]:
+In [13]:
+Pearson Correlation SepalLengthCm x SepalWidthCm: [[      1 -0.1094][-0.1094  1.0000]]Out[10]:1
+Out[11]:ARRAY(0x56123e65cd40)
+4.5 5 5.5 6 6.5 7 7.5 8
+2
+2.5
+3
+3.5
+4
+4.5
+Scatter Plot SepalLengthCm vs SepalWidthCm
+SepalLengthCm
+SepalWidthCm
+Pearson Correlation SepalLengthCm x PetalLengthCm: [[     1 0.8718][0.8718      1]]Out[13]:1
+printf "Pearson Correlation %s x %s: %s\n", @$header[0, 1],        mx->nd->corrcoef($X0, y=>$X1)->asstr;# Pearson Correlation X0 x X1#  [[ 1.         -0.10936925]#  [-0.10936925  1.        ]]
+my $color_scale = [    [0,   'green'],       [0.5, 'purple'],     [1,   'orange']   ];
+my $trace = new Chart::Plotly::Trace::Scatter(    x      => $X0->aspdl,    y      => $X1->aspdl,    mode   => 'markers',    marker => {         color      => $y->aspdl,        colorscale => $color_scale,          cmin       => $y->min,          cmax       => $y->max,        size       => 10    });
+my $layout = {title => { text => sprintf('Scatter Plot %s vs %s', @$header[0, 1]) },              xaxis => { title => $header->[0] }, yaxis => { title => $header->[1] },              width  => 900, height => 400,              margin => { l => 50, r => 0, t => 50, b => 50 }};              my $plot = new Chart::Plotly::Plot(traces => [$trace],                                   layout => $layout);
+sml->embedplot($plot, width=>900, height=>450);#show_plot($plot);IPerl->display($plot);
+printf "Pearson Correlation %s x %s: %s\n", @$header[0, 2],        mx->nd->corrcoef($X0, y=>$X2)->asstr;# Pearson Correlation X0 x X2#  [[1.         0.87175416]#  [0.87175416 1.        ]]
+12345
+12345
+1234567891011121314151617181920212223
+12345
+In [14]:
+In [15]:
+4.5 5 5.5 6 6.5 7 7.5 8
+1
+2
+3
+4
+5
+6
+7
+Scatter Plot SepalLengthCm vs PetalLengthCm
+SepalLengthCm
+PetalLengthCm
+Pearson Correlation SepalLengthCm x PetalWidthCm: [[     1 0.8180][0.8180      1]]Out[15]:1
+$trace = new Chart::Plotly::Trace::Scatter(    x      => $X0->aspdl,    y      => $X2->aspdl,    mode   => 'markers',    marker => {         color      => $y->aspdl,        colorscale => $color_scale,          cmin       => $y->min,          cmax       => $y->max,        size       => 10    });
+$layout = {title => { text => sprintf('Scatter Plot %s vs %s', @$header[0, 2]) },           xaxis => { title => $header->[0] }, yaxis => { title => $header->[2] },           width  => 900, height => 400,           margin => { l => 50, r => 0, t => 50, b => 50 }};              $plot = new Chart::Plotly::Plot(traces => [$trace],                                layout => $layout);                                sml->embedplot($plot, width=>900, height=>450);IPerl->display($plot);
+printf "Pearson Correlation %s x %s: %s\n", @$header[0, 3],        mx->nd->corrcoef($X0, y=>$X3)->asstr;# Pearson Correlation X0 x X3#  [[1.         0.81795363]#  [0.81795363 1.        ]]
+1234567891011121314151617181920212223
+12345
+In [16]:
+In [17]:
+4.5 5 5.5 6 6.5 7 7.5 80
+0.5
+1
+1.5
+2
+2.5
+Scatter Plot SepalLengthCm vs PetalWidthCm
+SepalLengthCm
+PetalWidthCm
+Pearson Correlation SepalWidthCm x PetalLengthCm: [[ 1.0000 -0.4205][-0.4205       1]]Out[17]:1
+$trace = new Chart::Plotly::Trace::Scatter(    x      => $X0->aspdl,    y      => $X3->aspdl,    mode   => 'markers',    marker => {         color      => $y->aspdl,        colorscale => $color_scale,          cmin       => $y->min,          cmax       => $y->max,        size       => 10    });
+$layout = {title => { text => sprintf('Scatter Plot %s vs %s', @$header[0, 3]) },           xaxis => { title => $header->[0] }, yaxis => { title => $header->[3] },           width  => 900, height => 400,           margin => { l => 50, r => 0, t => 50, b => 50 }};              $plot = new Chart::Plotly::Plot(traces => [$trace],                                layout => $layout);
+sml->embedplot($plot, width=>900, height=>450);IPerl->display($plot);
+printf "Pearson Correlation %s x %s: %s\n", @$header[1, 2],        mx->nd->corrcoef($X1, y=>$X2)->asstr;# Pearson Correlation X1 x X2#  [[ 1.        -0.4205161]#  [-0.4205161  1.       ]]
+1234567891011121314151617181920212223
+12345
+In [18]:
+In [20]:
+2 2.5 3 3.5 4 4.5
+1
+2
+3
+4
+5
+6
+7
+Scatter Plot SepalWidthCm vs PetalLengthCm
+SepalWidthCm
+PetalLengthCm
+Pearson Correlation SepalWidthCm x PetalWidthCm: [[ 1.0000 -0.3565][-0.3565       1]]Out[20]:1
+$trace = new Chart::Plotly::Trace::Scatter(    x      => $X1->aspdl,    y      => $X2->aspdl,    mode   => 'markers',    marker => {         color      => $y->aspdl,        colorscale => $color_scale,          cmin       => $y->min,          cmax       => $y->max,        size       => 10    });
+$layout = {title => { text => sprintf('Scatter Plot %s vs %s', @$header[1, 2]) },           xaxis => { title => $header->[1] }, yaxis => { title => $header->[2] },           width  => 900, height => 400,           margin => { l => 50, r => 0, t => 50, b => 50 }};              $plot = new Chart::Plotly::Plot(traces => [$trace],                                layout => $layout);
+IPerl->display($plot);sml->embedplot($plot, width=>900, height=>450);
+printf "Pearson Correlation %s x %s: %s\n", @$header[1, 3],        mx->nd->corrcoef($X1, y=>$X3)->asstr;# Pearson Correlation X1 x X3#  [[ 1.         -0.35654409]#  [-0.35654409  1.        ]]
+1234567891011121314151617181920212223
+12345
+In [21]:
+In [22]:
+2 2.5 3 3.5 4 4.50
+0.5
+1
+1.5
+2
+2.5
+Scatter Plot SepalWidthCm vs PetalWidthCm
+SepalWidthCm
+PetalWidthCm
+Pearson Correlation PetalLengthCm x PetalWidthCm: [[     1 0.9628][0.9628      1]]Out[22]:1
+$trace = new Chart::Plotly::Trace::Scatter(    x      => $X1->aspdl,    y      => $X3->aspdl,    mode   => 'markers',    marker => {         color      => $y->aspdl,        colorscale => $color_scale,          cmin       => $y->min,          cmax       => $y->max,        size       => 10    });
+$layout = {title => { text => sprintf('Scatter Plot %s vs %s', @$header[1, 3]) },           xaxis => { title => $header->[1] }, yaxis => { title => $header->[3] },           width  => 900, height => 400,           margin => { l => 50, r => 0, t => 50, b => 50 }};              $plot = new Chart::Plotly::Plot(traces => [$trace],                                layout => $layout);
+IPerl->display($plot);sml->embedplot($plot, width=>900, height=>450);
+printf "Pearson Correlation %s x %s: %s\n", @$header[2, 3],       mx->nd->corrcoef($X2, y=>$X3)->asstr;# Pearson Correlation X2 x X3#  [[1.        0.9627571]#  [0.9627571 1.       ]]
+1234567891011121314151617181920212223
+12345
+In [*]:
+In [25]:
+In [26]:
+1 2 3 4 5 6 70
+0.5
+1
+1.5
+2
+2.5
+Scatter Plot PetalLengthCm vs PetalWidthCm
+PetalLengthCm
+PetalWidthCm
+Normalized:[[0.2222 0.6250 0.0678 0.0417      0][0.1667 0.4167 0.0678 0.0417      0][0.1111 0.5000 0.0508 0.0417      0][0.0833 0.4583 0.0847 0.0417      0][0.1944 0.6667 0.0678 0.0417      0]]Out[25]:1
+Pearson Correlation coefficients of the Diabetes dataset: [[      1 -0.1094  0.8718  0.8180  0.7826][-0.1094  1.0000 -0.4205 -0.3565 -0.4194][ 0.8718 -0.4205       1  0.9628  0.9490][ 0.8180 -0.3565  0.9628       1  0.9565][ 0.7826 -0.4194  0.9490  0.9565       1]]Out[26]:1
+$trace = new Chart::Plotly::Trace::Scatter(    x      => $X2->aspdl,    y      => $X3->aspdl,    mode   => 'markers',    marker => {         color      => $y->aspdl,        colorscale => $color_scale,          cmin       => $y->min,          cmax       => $y->max,        size       => 10    });
+$layout = {title => { text => sprintf('Scatter Plot %s vs %s', @$header[2, 3]) },           xaxis => { title => $header->[2] }, yaxis => { title => $header->[3] },           width  => 900, height => 400,           margin => { l => 50, r => 0, t => 50, b => 50 }};              $plot = new Chart::Plotly::Plot(traces => [$trace],                                layout => $layout);
+IPerl->display($plot);sml->embedplot($plot, width=>900, height=>450);
+my $X_normalized = $dataset->slice(':', [0, -1]);my $y = $dataset->slice(':', -1);# normalizemy $minmax = sml->dataset_minmax($X_normalized);sml->normalize_dataset($X_normalized, $minmax);my $normalized = mx->nd->concat($X_normalized, $y->expand_dims(axis=>1));printf "Normalized:%s", $normalized->slice([0, 5])->asstr;
+my $corrcoef_normalized = mx->nd->corrcoef($normalized->transpose());printf "Pearson Correlation coefficients of the Diabetes dataset: %s\n",         $corrcoef_normalized->asstr;
+1234567891011121314151617181920212223
+1234567
+123
+In [27]:
+In [28]:
+Pearson Correlation coefficients of X: [[      1 -0.1094  0.8718  0.8180  0.7826][-0.1094  1.0000 -0.4205 -0.3565 -0.4194][ 0.8718 -0.4205       1  0.9628  0.9490][ 0.8180 -0.3565  0.9628       1  0.9565][ 0.7826 -0.4194  0.9490  0.9565       1]]Out[27]:1
+SepalLengthCmSepalWidthCmPetalLengthCmPetalWidthCmSpecies
+Species
+ WidthCm
+ ngthCm
+ WidthCm
+ ngthCm
+−0.4
+−0.2
+0
+0.2
+0.4
+0.6
+0.8
+1
+Heatmap for Pearson Correlation coefficients of Iris dataset
+printf "Pearson Correlation coefficients of X: %s\n", mx->nd->corrcoef($dataset->transpose())->asstr;# Pearson Correlation coefficients of X#  [[ 1.         -0.10936925  0.87175416  0.81795363]#  [-0.10936925  1.         -0.4205161  -0.35654409]#  [ 0.87175416 -0.4205161   1.          0.9627571 ]#  [ 0.81795363 -0.35654409  0.9627571   1.        ]]
+# Show a heatmap out of the Pearson Correlation coefficients of X$trace = new Chart::Plotly::Trace::Heatmap(    x => $header,    y => $header,    z => $corrcoef_normalized->aspdl,    colorscale => 'Jet', # Electric Greens Greys Hot Jet Picnic Portland Reds YlOrRd YlGnBu                           # https://plotly.com/javascript/colorscales/#hot-colorscale);
+$layout = {title => { text => 'Heatmap for Pearson Correlation coefficients of Iris dataset' },           yaxis => { autorange => "reversed" }, # Flip so lower frequencies are at the bottom           width  => 900, height => 400,           margin => { l => 50, r => 0, t => 50, b => 50 }};              $plot = new Chart::Plotly::Plot(traces => [$trace],                                layout => $layout);
+sml->embedplot($plot, width=>900, height=>450);IPerl->display($plot);
+123456
+12345678910111213141516171819
+Looking at pima-indians-diabetes dataset
+In [29]:
+In [30]:
+In [31]:
+In [32]:
+Normalized:[[0.3529 0.7437 0.5902 ... 0.2344 0.4833      1][0.0588 0.4271 0.5410 ... 0.1166 0.1667      0][0.4706 0.9196 0.5246 ... 0.2536 0.1833      1]...[0.2941 0.6080 0.5902 ... 0.0713 0.1500      0][0.0588 0.6332 0.4918 ... 0.1157 0.4333      1][0.0588 0.4673 0.5738 ... 0.1012 0.0333      0]]Out[29]:1
+Pearson Correlation coefficients of the Diabetes dataset: [[      1  0.1295  0.1413 -0.0817 -0.0735  0.0177 -0.0335  0.5443  0.2219][ 0.1295  1.0000  0.1526  0.0573  0.3314  0.2211  0.1373  0.2635  0.4666][ 0.1413  0.1526       1  0.2074  0.0889  0.2818  0.0413  0.2395  0.0651][-0.0817  0.0573  0.2074       1  0.4368  0.3926  0.1839 -0.1140  0.0748][-0.0735  0.3314  0.0889  0.4368       1  0.1979  0.1851 -0.0422  0.1305][ 0.0177  0.2211  0.2818  0.3926  0.1979  1.0000  0.1406  0.0362  0.2927][-0.0335  0.1373  0.0413  0.1839  0.1851  0.1406       1  0.0336  0.1738][ 0.5443  0.2635  0.2395 -0.1140 -0.0422  0.0362  0.0336       1  0.2384][ 0.2219  0.4666  0.0651  0.0748  0.1305  0.2927  0.1738  0.2384       1]]
+Out[30]:1
+[[ 0.6395  0.8478  0.1495 ...  0.4682  1.4251       1][-0.8443 -1.1227 -0.1604 ... -0.3648 -0.1905       0][ 1.2331  1.9425 -0.2638 ...  0.6040 -0.1055       1]...[ 0.3428  0.0033  0.1495 ... -0.6847 -0.2756       0][-0.8443  0.1597 -0.4704 ... -0.3709  1.1700       1][-0.8443 -0.8725  0.0462 ... -0.4735 -0.8708       0]]Out[31]:1
+Pearson Correlation coefficients of the Diabetes dataset: [[      1  0.1295  0.1413 -0.0817 -0.0735  0.0177 -0.0335  0.5443  0.2219][ 0.1295       1  0.1526  0.0573  0.3314  0.2211  0.1373  0.2635  0.4666][ 0.1413  0.1526       1  0.2074  0.0889  0.2818  0.0413  0.2395  0.0651][-0.0817  0.0573  0.2074       1  0.4368  0.3926  0.1839 -0.1140  0.0748][-0.0735  0.3314  0.0889  0.4368       1  0.1979  0.1851 -0.0422  0.1305][ 0.0177  0.2211  0.2818  0.3926  0.1979       1  0.1406  0.0362  0.2927][-0.0335  0.1373  0.0413  0.1839  0.1851  0.1406       1  0.0336  0.1738][ 0.5443  0.2635  0.2395 -0.1140 -0.0422  0.0362  0.0336       1  0.2384][ 0.2219  0.4666  0.0651  0.0748  0.1305  0.2927  0.1738  0.2384       1]]
+Out[32]:1
+# load and prepare datamy $filename = '../data/pima-indians-diabetes.csv';($dataset, $header) = sml->load_csv($filename, asndarray=>1);
+my $X_normalized = $dataset->slice(':', [0, -1]);my $y = $dataset->slice(':', -1);# normalizemy $minmax = sml->dataset_minmax($X_normalized);sml->normalize_dataset($X_normalized, $minmax);my $normalized = mx->nd->concat($X_normalized, $y->expand_dims(axis=>1));printf "Normalized:%s", $normalized->asstr;
+my $corrcoef_normalized = mx->nd->corrcoef($normalized->transpose());printf "Pearson Correlation coefficients of the Diabetes dataset: %s\n",         $corrcoef_normalized->asstr;
+# standardizemy $X_standardized = $dataset->slice(':', [0, -1]);# Estimate mean and standard deviationmy $means = sml->column_means($X_standardized);my $stdevs   = sml->column_stdevs($X_standardized, $means);
+# standardize datasetsml->standardize_dataset($X_standardized, $means, $stdevs);my $standardized = mx->nd->concat($X_standardized, $y->expand_dims(axis=>1));print $standardized->asstr;
+my $corrcoef_standardized = mx->nd->corrcoef($standardized->transpose());printf "Pearson Correlation coefficients of the Diabetes dataset: %s\n",         $corrcoef_standardized->asstr;
+1234567891011
+123
+12345678910
+123
+In [33]:
+In [34]:
+In [ ]:
+0-Pregnancies 1-Glucose 2-BloodPressure 3-SkinThickness 4-Insulin 5-BMI 6-DiabetesPedigreeFunction 7-Age 8-Outcome 
+PregnanciesGlucoseBloodPressureSkinThicknessInsulinBMIDiabetesPedigreeFunctionAge Outcome
+Outcome
+Age
+ Function
+BMI
+Insulin
+ hickness
+ Pressure
+Glucose
+ nancies
+0
+0.2
+0.4
+0.6
+0.8
+1
+Heatmap for Pearson Correlation coefficients of the Diabetes dataset
+printf "%d-%s ", $_, $header->[$_] for (0 .. $#$header);
+# Show a heatmap out of the Pearson Correlation coefficients of Xmy $trace = new Chart::Plotly::Trace::Heatmap(    x => $header,    y => $header,    z => mx->nd->corrcoef($normalized->transpose())->aspdl,    colorscale => 'YlOrRd', # Electric Greens Greys Hot Jet Picnic Portland Reds YlOrRd YlGnBu                            # https://plotly.com/javascript/colorscales/#hot-colorscale);
+$layout = {title => { text => 'Heatmap for Pearson Correlation coefficients of the Diabetes dataset' },           yaxis => { autorange => "reversed" }, # Flip so lower frequencies are at the bottom           width  => 900, height => 400,           margin => { l => 50, r => 0, t => 50, b => 50 }};              $plot = new Chart::Plotly::Plot(traces => [$trace],                                layout => $layout);
+sml->embedplot($plot, width=>900, height=>450);IPerl->display($plot);
+1
+12345678910111213141516171819
+1

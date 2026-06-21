@@ -88,9 +88,19 @@ sub render {
     $scale->{width}  ||= $canvas_w;
     $scale->{height} = $canvas_h;
 
-    # Guardar la última vela para render_last_visible_price
+    # spec 0000i: overscan. draw_start_offset permite que el slice de dibujo
+    # incluya velas extra (start-1, end+1). Los índices locales negativos o
+    # >= visible_count posicionan las velas overscan correctamente.
+    my $draw_offset = $scale->{draw_start_offset} || 0;
+    my $visible_count = $scale->{visible_count} || scalar(@$data);
+
+    # Guardar la última vela VISIBLE (no overscan) para render_last_visible_price.
+    # El último elemento visible en el slice está en índice -draw_offset + visible_count - 1.
     $self->{_last_candle} = undef;
-    for (my $i = $#$data; $i >= 0; $i--) {
+    my $last_vis_idx = -$draw_offset + $visible_count - 1;
+    $last_vis_idx = $#$data if $last_vis_idx > $#$data;
+    $last_vis_idx = $#$data if $last_vis_idx < 0;
+    for (my $i = $last_vis_idx; $i >= 0; $i--) {
         if (defined $data->[$i]) {
             $self->{_last_candle} = $data->[$i];
             last;
@@ -105,10 +115,15 @@ sub render {
         my $plot_w = int($scale->plot_width());
         $plot_w = 1 if $plot_w < 1;
         for my $px (0 .. $plot_w - 1) {
-            my $from = int($px * $x_bars / $plot_w);
-            my $to = int((($px + 1) * $x_bars / $plot_w) - 1);
+            # spec 0000i: mapear píxel a índice local visible, luego a índice del slice.
+            my $from_local = int($px * $x_bars / $plot_w);
+            my $to_local = int((($px + 1) * $x_bars / $plot_w) - 1);
+            $to_local = $from_local if $to_local < $from_local;
+            my $from = $from_local - $draw_offset;
+            my $to = $to_local - $draw_offset;
             $to = $from if $to < $from;
             $to = $total - 1 if $to >= $total;
+            $from = 0 if $from < 0;
 
             my ($open, $high, $low, $close);
             for my $i ($from .. $to) {
@@ -140,7 +155,7 @@ sub render {
 
             my ($ts, $open, $high, $low, $close, $vol) = @$candle;
 
-            my $cx  = $scale->index_to_center_x($i);
+            my $cx  = $scale->index_to_center_x($i + $draw_offset);
             my $y_o = $scale->value_to_y($open);
             my $y_h = $scale->value_to_y($high);
             my $y_l = $scale->value_to_y($low);
@@ -316,7 +331,7 @@ sub draw_crosshair {
     # bajo la línea vertical del crosshair.
     if (defined $time_text && length $time_text) {
         my $box_h     = 16;                 # alto de la cajita de tiempo
-        my $char_w    = 6;                  # ancho aproximado por carácter (Helvetica 9 bold)
+        my $char_w    = 7;                  # ancho aproximado por carácter (Helvetica 9 bold)
         my $pad_x     = 6;                  # padding horizontal a cada lado del texto
         my $half_w    = (length($time_text) * $char_w) / 2 + $pad_x;
 
@@ -343,6 +358,48 @@ sub draw_crosshair {
             -tags   => 'price_crosshair',
         );
     }
+}
+
+# draw_time_crosshair_label($canvas, $x, $time_text) — spec 0000d:
+# Dibuja la caja negra con la etiqueta de tiempo del crosshair sobre el
+# canvas del eje temporal (time_axis_canvas), centrada verticalmente en
+# ese canvas y con clamp horizontal para no salirse por izquierda/derecha.
+# Reemplaza la caja que antes se dibujaba al fondo del price_canvas.
+sub draw_time_crosshair_label {
+    my ($self, $canvas, $x, $time_text) = @_;
+
+    return unless defined $canvas;
+    $canvas->delete('time_axis_crosshair');
+    return unless defined $x && defined $time_text && length $time_text;
+
+    my ($w, $h) = $self->_canvas_size($canvas);
+
+    my $line_color = $self->{theme}{crosshair_line} // '#9598a1';
+    my $label_bg   = $self->{theme}{label_bg}        // '#363a45';
+    my $label_fg   = $self->{theme}{label_fg}        // '#ffffff';
+
+    my $char_w = 7;
+    my $pad_x  = 6;
+    my $half_w = (length($time_text) * $char_w) / 2 + $pad_x;
+
+    my $cx = $x;
+    $cx = $half_w      if $cx - $half_w < 0;
+    $cx = $w - $half_w if $cx + $half_w > $w;
+
+    $canvas->createRectangle(
+        $cx - $half_w, 0, $cx + $half_w, $h,
+        -fill    => $label_bg,
+        -outline => $line_color,
+        -tags    => 'time_axis_crosshair',
+    );
+    $canvas->createText(
+        $cx, $h / 2,
+        -text   => $time_text,
+        -anchor => 'center',
+        -font   => 'Helvetica 9 bold',
+        -fill   => $label_fg,
+        -tags   => 'time_axis_crosshair',
+    );
 }
 
 # Dibuja las etiquetas del eje de tiempo en la banda inferior del panel de precios.
@@ -387,7 +444,7 @@ sub draw_time_axis {
 
     # Paleta clara: líneas tenues con `grid`; texto y énfasis de fecha con `axis_text`.
     my $grid_color      = $self->{theme}{grid}      // '#e6e6e6';
-    my $date_grid_color = $self->{theme}{date_grid} // '#c4c9d1';
+    my $date_grid_color = $self->{theme}{date_grid} // '#d0d4da';
     my $text_color      = $self->{theme}{axis_text} // '#363a45';
 
     for my $item (@$labels) {
@@ -403,7 +460,8 @@ sub draw_time_axis {
 
         if ($is_date) {
             # Cambio de fecha: visible, pero suficientemente suave para no tapar velas.
-            if ($draw_grid && $item_grid) {
+            # spec 0000d: no dibujar grid si el label quedó oculto por thinning.
+            if ($draw_grid && $item_grid && $item_label) {
                 $canvas->createLine(
                     $x, 0, $x, $h,
                     -fill  => $date_grid_color,
@@ -424,7 +482,8 @@ sub draw_time_axis {
         }
         else {
             # Etiqueta horaria normal: línea de referencia vertical tenue.
-            if ($draw_grid && $item_grid) {
+            # spec 0000d: no dibujar grid si el label quedó oculto por thinning.
+            if ($draw_grid && $item_grid && $item_label) {
                 $canvas->createLine(
                     $x, 0, $x, $h,
                     -fill  => $grid_color,

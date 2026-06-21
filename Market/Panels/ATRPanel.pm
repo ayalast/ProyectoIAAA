@@ -90,8 +90,17 @@ sub render {
     $scale->_draw_y_scale($canvas);
     $canvas->lower('y_grid');
 
+    # spec 0000i: overscan. draw_start_offset permite índices locales negativos.
+    my $draw_offset = $scale->{draw_start_offset} || 0;
+    my $visible_count = $scale->{visible_count} || scalar(@$visible_values);
+
     my @points;
     $self->{_last_value} = undef;
+
+    # Último valor visible (no overscan) para render_last_visible_value.
+    my $last_vis_idx = -$draw_offset + $visible_count - 1;
+    $last_vis_idx = $#$visible_values if $last_vis_idx > $#$visible_values;
+    $last_vis_idx = $#$visible_values if $last_vis_idx < 0;
 
     my $total = scalar(@$visible_values);
     my $x_bars = $scale->{bars} || $total || 1;
@@ -101,10 +110,14 @@ sub render {
         my $plot_w = int($scale->plot_width());
         $plot_w = 1 if $plot_w < 1;
         for my $px (0 .. $plot_w - 1) {
-            my $from = int($px * $x_bars / $plot_w);
-            my $to = int((($px + 1) * $x_bars / $plot_w) - 1);
+            my $from_local = int($px * $x_bars / $plot_w);
+            my $to_local = int((($px + 1) * $x_bars / $plot_w) - 1);
+            $to_local = $from_local if $to_local < $from_local;
+            my $from = $from_local - $draw_offset;
+            my $to = $to_local - $draw_offset;
             $to = $from if $to < $from;
             $to = $total - 1 if $to >= $total;
+            $from = 0 if $from < 0;
 
             my ($sum, $count);
             for my $i ($from .. $to) {
@@ -112,21 +125,33 @@ sub render {
                 next if !defined $val;
                 $sum += $val;
                 $count++;
-                $self->{_last_value} = $val;
             }
             next unless $count;
             push @points, ($px + 0.5, $scale->value_to_y($sum / $count));
+        }
+        # _last_value from visible window only
+        for (my $i = $last_vis_idx; $i >= 0; $i--) {
+            if (defined $visible_values->[$i]) {
+                $self->{_last_value} = $visible_values->[$i];
+                last;
+            }
         }
     } else {
         for (my $i = 0; $i < @$visible_values; $i++) {
             my $val = $visible_values->[$i];
             next if !defined $val;
 
-            my $x = $scale->index_to_center_x($i);
+            my $x = $scale->index_to_center_x($i + $draw_offset);
             my $y = $scale->value_to_y($val);
 
             push @points, ($x, $y);
-            $self->{_last_value} = $val;
+        }
+        # _last_value from visible window only
+        for (my $i = $last_vis_idx; $i >= 0; $i--) {
+            if (defined $visible_values->[$i]) {
+                $self->{_last_value} = $visible_values->[$i];
+                last;
+            }
         }
     }
 

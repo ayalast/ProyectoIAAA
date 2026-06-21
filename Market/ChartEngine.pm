@@ -5,7 +5,9 @@ use warnings;
 use Time::Moment;
 use Market::Panels::Scales;
 use Market::Panels::PricePanel;
-use Market::Panels::ATRPanel; 
+use Market::Panels::ATRPanel;
+use Market::ReplayController;
+use Market::OverlayManager;
 
 # Constantes del módulo (valores fijos del paquete, no estado global mutable).
 #   RIGHT_MARGIN     => margen interno derecho del área de ploteo. Los ejes ahora
@@ -96,6 +98,14 @@ sub new {
         theme  => $self->{theme},
     );
 
+    # spec 0002: ReplayController — índice-tope para Replay.
+    $self->{replay_controller} = Market::ReplayController->new(
+        market_data => $self->{market_data},
+    );
+
+    # spec 0003: OverlayManager — registro de overlays.
+    $self->{overlay_manager} = Market::OverlayManager->new();
+
     $self->bind_events();
     
     return $self;
@@ -119,8 +129,20 @@ sub compute_window {
 
     $self->{offset} = $self->_clamp_offset($self->{offset});
 
-    my $end_idx = $total_candles - 1 - $self->{offset};
+    # spec 0002: si Replay está activo, el límite superior efectivo es replay_idx.
+    # Ninguna capa debe leer/dibujar velas con índice > replay_idx.
+    my $replay = $self->{replay_controller};
+    my $effective_total = $total_candles;
+    if ($replay && $replay->is_active()) {
+        my $eff_end = $replay->effective_end($total_candles - 1);
+        $effective_total = $eff_end + 1;
+    }
+
+    my $end_idx = $effective_total - 1 - $self->{offset};
     my $start_idx = $end_idx - $self->{visible_bars} + 1;
+
+    # spec 0002: clamp start a 0 si el tope de replay deja pocas velas.
+    $start_idx = 0 if $start_idx < 0;
 
     return ($start_idx, $end_idx);
 }
@@ -241,6 +263,22 @@ sub render {
     my $visible_atr     = $self->{indicator_manager}->slice_array('ATR', $start, $end);
     $self->_pad_visible_slice($visible_candles, $start, $end);
     $self->_pad_visible_slice($visible_atr, $start, $end);
+
+    # spec 0000i: overscan de render horizontal. El slice de dibujo incluye
+    # una vela extra a cada lado (start-1, end+1) para que las velas parcialmente
+    # visibles durante paneo suave (ctrl_zoom_x_shift) se rendericen desde antes.
+    # La escala X sigue usando x_bars de la ventana visible; draw_start_offset
+    # permite al panel calcular el índice local correcto (incluyendo -1 y
+    # visible_bars) para posicionar las velas overscan.
+    my $total = $self->{market_data}->size();
+    my $draw_start = $start > 0 ? $start - 1 : $start;
+    my $draw_end   = ($end < $total - 1) ? $end + 1 : $end;
+    my $draw_candles = $self->{market_data}->get_slice($draw_start, $draw_end);
+    my $draw_atr     = $self->{indicator_manager}->slice_array('ATR', $draw_start, $draw_end);
+    $self->_pad_visible_slice($draw_candles, $draw_start, $draw_end);
+    $self->_pad_visible_slice($draw_atr, $draw_start, $draw_end);
+    my $draw_start_offset = $draw_start - $start;
+    my $visible_count = $end - $start + 1;
     
     # 3. Calcular rangos de precios e indicadores para construir escalas dinámicas
     my ($min_p, $max_p) = $self->{price_panel}->get_y_range($visible_candles);
@@ -298,11 +336,15 @@ sub render {
     $price_scale->{draw_crosshair_label} = $self->{price_axis_canvas} ? 0 : 1;
     $price_scale->{x_shift} = $self->{ctrl_zoom_x_shift} || 0;
     $price_scale->{tick_size} = 0.25;
+    $price_scale->{draw_start_offset} = $draw_start_offset;
+    $price_scale->{visible_count} = $visible_count;
     $atr_scale->{width}    = $shared_w;
     $atr_scale->{height}   = $atr_h;
     $atr_scale->{draw_labels} = $self->{atr_axis_canvas} ? 0 : 1;
     $atr_scale->{draw_last_label} = $self->{atr_axis_canvas} ? 0 : 1;
     $atr_scale->{x_shift} = $self->{ctrl_zoom_x_shift} || 0;
+    $atr_scale->{draw_start_offset} = $draw_start_offset;
+    $atr_scale->{visible_count} = $visible_count;
 
     
     $self->{price_panel}->set_scale($price_scale);
@@ -310,13 +352,23 @@ sub render {
     $self->{atr_panel}->set_scale($atr_scale);
     
     # 5. Ejecutar render en cada sub-canvas
-    $self->{price_panel}->render($self->{price_canvas}, $visible_candles, $price_scale);
-    $self->{atr_panel}->render($self->{atr_canvas}, $visible_atr, $atr_scale);
+    # spec 0000i: pasar draw_candles (con overscan) al panel para que las velas
+    # parcialmente visibles durante paneo se rendericen desde antes.
+    $self->{price_panel}->render($self->{price_canvas}, $draw_candles, $price_scale);
+    $self->{atr_panel}->render($self->{atr_canvas}, $draw_atr, $atr_scale);
     my $time_labels = $self->compute_intraday_labels();
     $self->{price_panel}->draw_time_axis($self->{price_canvas}, $time_labels, { draw_grid => 1, draw_labels => 0 });
     $self->_render_price_axis($price_scale, $visible_candles);
     $self->_render_atr_axis($atr_scale, $visible_atr);
     $self->_render_time_axis($price_scale, $time_labels);
+
+    # spec 0003: overlays — compute + draw respetando replay_idx (start/end
+    # ya vienen truncados por compute_window si Replay está activo).
+    if ($self->{overlay_manager}) {
+        $self->{overlay_manager}->compute_all($self->{market_data}, $start, $end);
+        $self->{overlay_manager}->draw_all($self->{price_canvas}, $price_scale);
+    }
+
     $self->_draw_crosshair_all() if defined $self->{last_mouse_x};
     $self->_redraw_pointer_symbol();
 }
@@ -997,13 +1049,15 @@ sub _horizontal_zoom {
 sub _start_horizontal_drag {
     my ($self, $widget, $x, $y) = @_;
 
-    $self->_clear_ctrl_zoom_state();
+    # spec 0000c: preservar x_shift para paneo fraccional suave. NO limpiar
+    # ctrl_zoom_state aquí; reset_view/set_timeframe sí lo resetean cuando corresponde.
     my $root_x = eval { $widget->pointerx() };
     my $root_y = eval { $widget->pointery() };
     $self->{drag_start_x} = defined $root_x ? $root_x : $x;
     $self->{drag_start_y} = defined $root_y ? $root_y : $y;
     $self->{drag_start_panel} = defined $widget && defined $self->{atr_canvas} && $widget == $self->{atr_canvas} ? 'atr' : 'price';
     $self->{drag_start_offset} = $self->{offset};
+    $self->{drag_start_x_shift} = $self->{ctrl_zoom_x_shift} || 0;
 
     if (defined $widget) {
         $self->_set_cursor($widget, 'fleur');
@@ -1040,8 +1094,30 @@ sub _on_horizontal_drag {
     my $bar_w = $scale->plot_width() / ($self->{visible_bars} || 1);
     return if $bar_w <= 0;
 
-    my $delta_bars = int(($current_x - $self->{drag_start_x}) / $bar_w);
-    $self->{offset} = $self->_clamp_offset($self->{drag_start_offset} + $delta_bars);
+    # spec 0000c: paneo horizontal suave/fraccional. Se separa el desplazamiento
+    # en píxeles en parte entera (offset) y resto fraccional (x_shift), de modo
+    # que arrastres menores a una vela desplacen visualmente sin saltar offset.
+    my $dx = $current_x - $self->{drag_start_x};
+    my $delta_float = $dx / $bar_w;
+    my $delta_whole = int($delta_float);
+    my $remainder_px = $dx - ($delta_whole * $bar_w);
+
+    my $new_offset = $self->{drag_start_offset} + $delta_whole;
+    my $new_shift  = ($self->{drag_start_x_shift} || 0) + $remainder_px;
+
+    # Normalizar: mantener x_shift en [-bar_w, bar_w] ajustando offset.
+    while ($new_shift >= $bar_w) {
+        $new_shift -= $bar_w;
+        $new_offset += 1;
+    }
+    while ($new_shift <= -$bar_w) {
+        $new_shift += $bar_w;
+        $new_offset -= 1;
+    }
+
+    $self->{offset} = $self->_clamp_offset($new_offset);
+    $self->{ctrl_zoom_x_shift} = $new_shift;
+
     if (($self->{drag_start_panel} || 'price') eq 'atr') {
         $self->_apply_atr_vertical_drag_from_start($current_y);
     } else {
@@ -1330,6 +1406,8 @@ sub _end_drag {
     $self->{drag_start_max_y} = undef;
     $self->{atr_drag_start_min_y} = undef;
     $self->{atr_drag_start_max_y} = undef;
+    $self->{drag_start_offset} = undef;
+    $self->{drag_start_x_shift} = undef;
     $self->{drag_cursor_canvas} = undef;
 }
 
@@ -1451,7 +1529,7 @@ sub _on_mouse_move {
     $self->_draw_pointer_symbol($widget, $pixel_x, $pixel_y, 'cross');
 }
 
-# _crosshair_time_label — texto de tiempo (HH:MM) de la vela bajo el cursor (Req. 7.4).
+# _crosshair_time_label — etiqueta de fecha estilo TradingView (Dow DD Mon 'YY) de la vela bajo el cursor (Req. 7.4, spec 0000).
 #
 # Calcula el índice de dato bajo el cursor a partir de la posición horizontal
 # almacenada en $self->{last_mouse_x}. Toda conversión X->índice vive en Scales
@@ -1464,10 +1542,11 @@ sub _on_mouse_move {
 # El índice LOCAL se convierte a GLOBAL sumando 'start' (inicio de la ventana):
 #   global = start + local
 # Con ese índice global se obtiene el timestamp de MarketData (get_timestamp), se
-# parsea con Time::Moment y se formatea como HH:MM (24h, cero a la izquierda)
-# reutilizando el helper YA EXISTENTE _time_label_for_index($tm, 0) (is_date = 0).
+# parsea con Time::Moment y se formatea como fecha+hora TradingView
+# 'Dow DD Mon 'YY HH:MM' (p.ej. "Thu 23 Apr '26 09:31") reutilizando el helper
+# _crosshair_date_label($tm) como prefijo de fecha y añadiendo HH:MM (spec 0000c).
 #
-# Devuelve la cadena 'HH:MM', o undef si:
+# Devuelve la cadena 'Dow DD Mon 'YY HH:MM', o undef si:
 #   * no hay cursor (last_mouse_x indefinido),
 #   * la ventana visible no tiene barras,
 #   * el índice global queda fuera del rango real de datos, o
@@ -1501,13 +1580,15 @@ sub _crosshair_time_label {
     my $size = $self->{market_data}->size();
     return undef if $global < 0 || $global >= $size;
 
-    # Timestamp de MarketData -> Time::Moment -> 'HH:MM' (is_date = 0).
+    # Timestamp de MarketData -> Time::Moment -> 'Dow DD Mon 'YY HH:MM' (spec 0000c).
     my $ts = $self->{market_data}->get_timestamp($global);
     return undef unless defined $ts;
     my $tm = eval { Time::Moment->from_string($ts) };
     return undef unless $tm;
 
-    return $self->_time_label_for_index($tm, 0);
+    my $date = $self->_crosshair_date_label($tm);
+    return undef unless defined $date;
+    return sprintf("%s %02d:%02d", $date, $tm->hour, $tm->minute);
 }
 
 sub _draw_crosshair_all {
@@ -1525,6 +1606,10 @@ sub _draw_crosshair_all {
         $self->{atr_panel}->draw_crosshair(undef, undef);
         $self->_draw_price_axis_crosshair(undef);
         $self->_draw_atr_axis_crosshair(undef);
+        # spec 0000d: limpiar la etiqueta del crosshair temporal del canvas del eje.
+        if (defined $self->{time_axis_canvas}) {
+            $self->{time_axis_canvas}->delete('time_axis_crosshair');
+        }
         return;
     }
 
@@ -1547,7 +1632,14 @@ sub _draw_crosshair_all {
     # draw_crosshair($x, $y, $time_text). El ATRPanel mantiene su firma de 2
     # argumentos (NO recibe etiqueta de tiempo); la X sigue sincronizada entre
     # ambos paneles porque comparten $last_x.
-    $self->{price_panel}->draw_crosshair($last_x, $price_y, $time_text);
+    # spec 0000d: si existe time_axis_canvas, la caja de tiempo se dibuja ahí
+    # (draw_time_crosshair_label), no en el price_canvas.
+    if (defined $self->{time_axis_canvas}) {
+        $self->{price_panel}->draw_crosshair($last_x, $price_y, undef);
+        $self->{price_panel}->draw_time_crosshair_label($self->{time_axis_canvas}, $last_x, $time_text);
+    } else {
+        $self->{price_panel}->draw_crosshair($last_x, $price_y, $time_text);
+    }
     $self->{atr_panel}->draw_crosshair($last_x, $atr_y);
     $self->_draw_price_axis_crosshair($price_y);
     $self->_draw_atr_axis_crosshair($atr_y);
@@ -1614,13 +1706,18 @@ sub reset_view {
 # El índice local se obtiene como `global - start`, robusto frente a timestamps
 # omitidos (no es la posición del bucle).
 #
-# Espaciado temporal (Req. 5.6): la cuadrícula usa timestamps reales alineados al
-# reloj según una escalera de intervalos. En 1m con intervalo 5, marca :00, :05,
-# :10, etc.; nunca fases arbitrarias como :02, :07 por efecto del zoom.
+# Espaciado temporal (Req. 5.6, spec 0000b): el eje inferior prioriza fronteras
+# REALES de reloj/calendario tipo TradingView, no equidistancia por stride. Se
+# escanea cada timestamp visible; un tick se selecciona si cae en una frontera
+# real del intervalo elegido (HH:MM con (hour*60+minute) % interval == 0). Los
+# gaps de sesión/noche/fin de semana no crean huecos visuales (las velas siguen
+# por índice), pero tampoco fuerzan marcas equidistantes que pierdan coherencia
+# de reloj.
 #
-# Cambios de día (Req. 6.1, 6.4): en zoom amplio se muestran fechas sobre el mismo
-# stride uniforme; no se insertan anclas extra fuera del ritmo para evitar distancias
-# visuales irregulares entre líneas verticales.
+# Cambios de día (Req. 6.1, 6.4): la fecha ("DD Mon", is_date => 1) aparece SOLO
+# cuando hay cambio real de día respecto al timestamp global anterior, o cuando la
+# vela cae en medianoche real (00:00) sin vela anterior. La primera vela visible a
+# mitad de día NO se convierte en fecha: muestra "HH:MM".
 #
 # Casos límite:
 #   * Ventana sin barras => lista vacía sin error (Req. 5.7).
@@ -1664,64 +1761,569 @@ sub compute_intraday_labels {
     my $tf_minutes = $self->_timeframe_minutes();
     my $interval_minutes = $self->_time_axis_interval_minutes($tf_minutes, $bar_w);
 
-    my @items;
-    my $date_mode = ($interval_minutes >= 180) ? 1 : 0;
-    my $last_day_key;
+    # spec 0000g: plan global de cadencia uniforme tipo TradingView.
+    # Se elige UNA cadencia dominante para toda la ventana visible, no se
+    # aceptan candidatos localmente por peso. Los días son anchors obligatorios
+    # y las horas siguen una única cadencia. Esto evita secuencias irregulares
+    # tipo DAY|HOUR|DAY|DAY|HOUR.
+    # Modo A = días + horas uniformes. El modo diario es fallback incompleto.
 
+    # Peek al timestamp pre-ventana para detectar cambio de día en el primer visible.
+    my $prev_tm;
+    if ($start > 0) {
+        my $pre_ts = $self->{market_data}->get_timestamp($start - 1);
+        $prev_tm = eval { Time::Moment->from_string($pre_ts) } if defined $pre_ts;
+    }
+
+    # Construir candidatos desde velas reales (spec 0000e/0000f: índices enteros).
+    my @candidates;
     for my $el (@$visible_elements) {
         my $global = $el->{index};
-        next if $global < $start || $global > $end;
-        my $local = $global - $start;
-        my $tm = $tm_by_local{$local};
+        my $tm     = $el->{ts};
         next unless defined $tm;
-        next unless $self->_is_time_axis_boundary($tm, $interval_minutes);
 
-        my $day_key = sprintf('%04d-%02d-%02d', $tm->year, $tm->month, $tm->day_of_month);
-        my $is_date = (!defined $last_day_key || $day_key ne $last_day_key) ? 1 : 0;
-        my $show_label = $date_mode ? $is_date : 1;
-        my $text = $self->_time_label_for_index($tm, $date_mode ? 1 : $is_date);
+        my $local  = $global - $start;
+        my $weight = $self->_time_axis_weight_for_point($tm, $prev_tm);
+        next if $weight < 21;  # skip MIN1: TradingView closest cadence is 5m
+        my $text   = $self->_time_axis_label_for_weight($tm, $weight);
         next unless defined $text;
 
-        push @items, {
-            index   => $local,
-            text    => $text,
-            is_date => $date_mode ? 1 : $is_date,
-            grid    => 1,
-            label   => $show_label,
-            x       => $scale->index_to_center_x($local),
-            w       => length($text) * 7 + 16,
+        push @candidates, {
+            index         => $local,
+            text          => $text,
+            weight        => $weight,
+            is_date       => ($weight >= 50) ? 1 : 0,
+            intraday_mins => $tm->hour * 60 + $tm->minute,
+            year          => $tm->year,
+            month         => $tm->month,
+            day           => $tm->day_of_month,
+            date_ordinal  => $tm->year * 366 + $tm->day_of_year,
+            grid          => 1,
+            label         => 0,
+            x             => $scale->index_to_center_x($local),
         };
-        $last_day_key = $day_key;
+        $prev_tm = $tm;
     }
 
-    my @label_boxes;
-    for my $item (sort { $b->{is_date} <=> $a->{is_date} || $a->{x} <=> $b->{x} } @items) {
-        my $left = $item->{x} - $item->{w} / 2;
-        my $right = $item->{x} + $item->{w} / 2;
-        my $ok = 1;
-        for my $box (@label_boxes) {
-            if ($left < $box->{right} + 8 && $right > $box->{left} - 8) {
-                $ok = 0;
-                last;
-            }
+    # Elegir el mejor plan global de cadencia (spec 0000g).
+    my $plan = $self->_choose_time_axis_plan(\@candidates, $bar_w, $tf_minutes);
+
+    # Marcar aceptados del plan con label=1; el resto queda con label=0 pero
+    # grid=1 para compatibilidad con tests que inspeccionan candidatos por grid.
+    # El plan puede sobrescribir texto/tipo (p.ej. día 1 -> Apr en zoom calendario).
+    my %accepted = map { $_->{index} => $_ } @$plan;
+    for my $cand (@candidates) {
+        my $planned = $accepted{ $cand->{index} };
+        if ($planned) {
+            $cand->{label} = 1;
+            $cand->{text} = $planned->{text} if defined $planned->{text};
+            $cand->{is_date} = $planned->{is_date} if exists $planned->{is_date};
         }
-        $item->{label} = $ok ? 1 : 0;
-        push @label_boxes, { left => $left, right => $right } if $ok;
+        else {
+            $cand->{label} = 0;
+        }
     }
 
-    my $visible_count = 0;
-    for my $item (@items) {
-        $visible_count++ if $item->{label};
-    }
-    if ($visible_count == 0 && @items) {
-        $items[int(@items / 2)]->{label} = 1;
-    }
-
-    for my $item (sort { $a->{index} <=> $b->{index} } @items) {
-        push @labels, { index => $item->{index}, text => $item->{text}, is_date => $item->{is_date}, grid => $item->{grid}, label => $item->{label} };
+    for my $item (sort { $a->{index} <=> $b->{index} } @candidates) {
+        push @labels, {
+            index   => $item->{index},
+            text    => $item->{text},
+            is_date => $item->{is_date},
+            grid    => $item->{grid},
+            label   => $item->{label},
+        };
     }
 
     return \@labels;
+}
+
+# _choose_time_axis_plan($candidates, $bar_w, $tf_minutes) — spec 0000g
+# Elije un plan global de cadencia uniforme. Prueba cadencias de densa a
+# dispersa; la primera que produce min_gap_px >= 65 y consistencia entre
+# segmentos día-a-día es el plan Modo A aceptado.
+# Si ninguna cadencia intradía funciona, retorna solo días (fallback incompleto).
+sub _choose_time_axis_plan {
+    my ($self, $candidates, $bar_w, $tf_minutes) = @_;
+
+    # Zoom calendario: cuando el ancho por barra es mínimo y la ventana cubre
+    # muchas fechas, TradingView deja de mostrar horas y usa mes + días.
+    # No activar en rangos cortos 1m/5m: aunque bar_w sea bajo, allí 0000g debe
+    # seguir mostrando Modo A (días + horas) si caben horas.
+    my @date_candidates = grep { $_->{is_date} } @$candidates;
+    if ($bar_w <= 1.15 && @date_candidates >= 20) {
+        my @calendar = $self->_build_calendar_time_axis_plan($candidates, $bar_w);
+        return \@calendar if @calendar >= 2;
+    }
+
+    my @cadences = (5, 15, 30, 60, 90, 180, 360, 720, 1440);
+    @cadences = grep { $_ >= $tf_minutes } @cadences;
+
+    # Similar a LWC: separar por ancho de label. 65px evita saturar 1m/5m
+    # y permite 90m en NQ1!/15m cuando el canvas visible tiene ancho comparable
+    # al de la app/screenshot de TradingView.
+    my $min_label_px = 65;
+    my $min_indices  = int(($min_label_px / $bar_w) + 0.999);
+    $min_indices = 1 if $min_indices < 1;
+
+    for my $cad (@cadences) {
+        # spec 0000g: solo probar cadencias cuyo espaciado natural en píxeles
+        # es >= min_label_px. Thinning de una cadencia densa crea cadencias
+        # efectivas sucias (e.g. thinning 1h a cada 8h produce 08:00, no limpio).
+        my $cadence_px = ($cad / $tf_minutes) * $bar_w;
+        next if $cadence_px < $min_label_px;
+
+        my @plan = $self->_build_time_axis_plan($candidates, $cad, $min_indices);
+        @plan = $self->_adjust_sparse_time_axis_plan($candidates, \@plan, $cad, $tf_minutes, $min_indices);
+        @plan = $self->_densify_sparse_gaps_in_time_axis_plan($candidates, \@plan, $cad, $tf_minutes, $min_indices);
+        next unless @plan >= 2;
+
+        my $min_gap = $self->_plan_min_gap_px(\@plan, $cad, $tf_minutes);
+        next if !defined($min_gap) || $min_gap < $min_label_px;
+
+        if ($self->_plan_is_consistent(\@plan, $cad, $tf_minutes)) {
+            return \@plan;
+        }
+    }
+
+    # Fallback: solo días (incompleto, no aceptación final de spec 0000g).
+    my @daily = $self->_build_time_axis_plan($candidates, 1440, $min_indices);
+    return \@daily;
+}
+
+# _build_calendar_time_axis_plan($candidates, $bar_w) — zoom calendario.
+# Usa solo anchors de fecha reales: mes + días seleccionados. No muestra horas.
+# Generalista: separación por ancho estimado de label (box-based), no umbral fijo.
+# Los anchors de mes (Apr, May) siempre ganan frente a días cercanos.
+# spec 0000i: densidad tipo TradingView — permite días consecutivos si caben.
+# spec 0000j: filtra días de sesión parcial nocturna (primera vela >= 17:00)
+# que TradingView no muestra como labels principales en modo calendario mensual.
+sub _build_calendar_time_axis_plan {
+    my ($self, $candidates, $bar_w) = @_;
+
+    my @dates = grep { $_->{is_date} } @$candidates;
+    return () unless @dates;
+
+    my @months = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+
+    # spec 0000j: umbral de sesión parcial nocturna. Un día cuya primera vela
+    # sea >= 17:00 (1020 min) y no tenga velas antes del mediodía es un anchor
+    # débil: TradingView no lo usa como label principal en calendario mensual.
+    my $NOCTURNAL_THRESHOLD_MINS = 1020;
+
+    # Ancho estimado de cada tipo de label en píxeles.
+    my $day_label_px = 20;
+    my $month_label_px = 40;
+    my $min_gap_px = 6;
+
+    # spec 0000j: separación mínima entre días basada en calendario, no solo
+    # en ancho de texto. Cuando se omiten días parciales (domingos nocturnos),
+    # los días vecinos pueden quedar comprimidos por el gap de sesión. Exigir
+    # que la separación x entre días sea >= 80% de un día calendario normal.
+    # Esto evita que aparezcan días como 6 pegados a 3 tras omitir el domingo 5.
+    my $normal_day_indices = 96; # ~96 barras de 15m por día con sesión completa
+    my $min_day_gap_px = int($normal_day_indices * $bar_w * 0.80 + 0.5);
+    $min_day_gap_px = $min_gap_px if $min_day_gap_px < $min_gap_px;
+
+    my @calendar;
+    for my $d (@dates) {
+        my %cand = %$d;
+        if (($cand{day} || 0) == 1 || ($cand{weight} || 0) >= 60) {
+            $cand{text} = $months[($cand{month} || 1) - 1] || $cand{text};
+            $cand{calendar_month_anchor} = 1;
+            $cand{label_half_width} = $month_label_px / 2;
+            $cand{weak_partial_session} = 0;
+        }
+        else {
+            $cand{label_half_width} = $day_label_px / 2;
+            # spec 0000j: detectar sesión parcial nocturna.
+            my $first_mins = $cand{intraday_mins} // 0;
+            $cand{weak_partial_session} = ($first_mins >= $NOCTURNAL_THRESHOLD_MINS) ? 1 : 0;
+        }
+        push @calendar, \%cand;
+    }
+
+    my @accepted;
+    for my $cand (@calendar) {
+        if ($cand->{calendar_month_anchor}) {
+            # Mes siempre entra. Si colisiona con último día aceptado, el día se elimina.
+            if (@accepted && !$accepted[-1]{calendar_month_anchor}) {
+                my $half_sum = $accepted[-1]{label_half_width} + $cand->{label_half_width} + $min_gap_px;
+                if ($cand->{x} - $accepted[-1]{x} < $half_sum) {
+                    pop @accepted;
+                }
+            }
+            push @accepted, $cand;
+            next;
+        }
+
+        # spec 0000j: omitir días de sesión parcial nocturna en modo calendario.
+        next if $cand->{weak_partial_session};
+
+        # Día normal: aceptar si no colisiona con el último aceptado.
+        if (@accepted) {
+            my $last = $accepted[-1];
+            if (!$last->{calendar_month_anchor}) {
+                # Día-día: exigir separación calendario mínima.
+                next if $cand->{x} - $last->{x} < $min_day_gap_px;
+            }
+            else {
+                # Mes-día: separación por ancho de label.
+                my $half_sum = $last->{label_half_width} + $cand->{label_half_width} + $min_gap_px;
+                next if $cand->{x} - $last->{x} < $half_sum;
+            }
+        }
+        push @accepted, $cand;
+    }
+
+    return @accepted;
+}
+
+# _build_time_axis_plan($candidates, $cadence, $min_indices) — spec 0000g
+# Construye un plan con una sola cadencia: todos los anchors de día/mes/año
+# + horas que satisfagan minutes % cadence == 0.
+#
+# Importante: dentro de UNA cadencia, las horas se aceptan cronológicamente.
+# No se ordenan por peso porque eso degrada 90m a una cadencia visual de 3h
+# (18:00/21:00 desplazan 19:30/22:30), distinto a TradingView en NQ1! 15m.
+# Los anchors de día/mes/año siguen reemplazando el timestamp de su propia vela.
+sub _build_time_axis_plan {
+    my ($self, $candidates, $cadence, $min_indices) = @_;
+
+    my @filtered;
+    for my $cand (@$candidates) {
+        if ($cand->{weight} >= 50) {
+            push @filtered, { %$cand };
+        }
+        elsif ($cadence < 1440 && defined $cand->{intraday_mins}
+               && $cand->{intraday_mins} % $cadence == 0) {
+            push @filtered, { %$cand };
+        }
+    }
+
+    my @accepted;
+    for my $cand (sort { $a->{index} <=> $b->{index} } @filtered) {
+        if (@accepted && $cand->{index} - $accepted[-1]{index} < $min_indices) {
+            # Si el candidato actual representa una frontera temporal más importante
+            # (p.ej. 01:00 sobre 00:15, o DAY/MONTH sobre hora cercana), reemplaza
+            # la marca previa. Esto mantiene fronteras reales de reloj/calendario sin
+            # volver al thinning global por peso que destruía la cadencia 90m.
+            if (($cand->{weight} || 0) > ($accepted[-1]{weight} || 0)) {
+                pop @accepted;
+            }
+            else {
+                next;
+            }
+        }
+        $cand->{label} = 1;
+        push @accepted, $cand;
+    }
+
+    return @accepted;
+}
+
+# _adjust_sparse_time_axis_plan() — ajustes tipo TradingView en zooms lejanos.
+# Generalista: parte del plan de cadencia global y, solo para cadencias intradía
+# lejanas (>=12h, <1D), enriquece huecos amplios con candidatos reales de alta
+# jerarquía (HOUR12/HOUR6/HOUR3) si respetan separación. No hardcodea fechas ni
+# horas específicas: la hora elegida sale de pesos temporales + espacio disponible.
+sub _adjust_sparse_time_axis_plan {
+    my ($self, $candidates, $plan, $cadence, $tf_minutes, $min_indices) = @_;
+    return @$plan if !defined($cadence) || $cadence < 720 || $cadence >= 1440 || !$plan || !@$plan;
+
+    my @out = map { { %$_ } } @$plan;
+    my $natural_indices = (defined $tf_minutes && $tf_minutes > 0)
+        ? int(($cadence / $tf_minutes) + 0.999)
+        : 0;
+    my $compressed_gap_limit = $natural_indices + int($natural_indices / 2 + 0.999);
+
+    # Si hay DAY|DAY comprimido por sesión/weekend, el segundo DAY puede ocultarse
+    # para dejar que el intervalo respire con horas intradía reales. Esto replica la
+    # compresión lógica de TradingView sin inventar puntos.
+    my %drop_index;
+    my @dropped_dates;
+    for (my $i = 1; $i < @out; $i++) {
+        my $left  = $out[$i - 1];
+        my $right = $out[$i];
+        next unless $left->{is_date} && $right->{is_date};
+        next unless $natural_indices > 0 && ($right->{index} - $left->{index}) <= $compressed_gap_limit;
+
+        my $next = $out[$i + 1];
+        next unless $next;
+        my @inside = grep {
+            !$_->{is_date}
+            && ($_->{weight} || 0) >= 31
+            && $_->{index} > $right->{index}
+            && $_->{index} < $next->{index}
+            && $_->{index} - $left->{index} >= $min_indices
+            && $next->{index} - $_->{index} >= $min_indices
+        } @$candidates;
+        if (@inside) {
+            $drop_index{ $right->{index} } = 1;
+            push @dropped_dates, { %$right };
+        }
+    }
+    @out = grep { !$drop_index{ $_->{index} } } @out;
+
+    my %selected = map { $_->{index} => 1 } @out;
+    my @extra;
+
+    my $try_add_between = sub {
+        my ($left, $right) = @_;
+        my $left_idx  = defined $left  ? $left->{index}  : -1;
+        my $right_idx = defined $right ? $right->{index} : undef;
+        return unless defined $right_idx;
+
+        my @pool = grep {
+            !$_->{is_date}
+            && !$selected{ $_->{index} }
+            && ($_->{weight} || 0) >= 31
+            && $_->{index} > $left_idx
+            && $_->{index} < $right_idx
+        } @$candidates;
+
+        # Igual que LWC: pesos mayores primero; luego orden cronológico. La separación
+        # final evita saturar y determina si queda HOUR12, HOUR6 o HOUR3.
+        for my $cand (sort { ($b->{weight} || 0) <=> ($a->{weight} || 0) || $a->{index} <=> $b->{index} } @pool) {
+            my $ok = 1;
+            for my $s (@out, @extra) {
+                if (abs($cand->{index} - $s->{index}) < $min_indices) {
+                    $ok = 0;
+                    last;
+                }
+            }
+            next unless $ok;
+            push @extra, { %$cand };
+            $selected{ $cand->{index} } = 1;
+        }
+    };
+
+    # Borde izquierdo. Esto añade labels como 03:00 solo cuando realmente caben
+    # antes del primer hito fuerte.
+    $try_add_between->(undef, $out[0]) if @out;
+
+    # Huecos internos: solo rellenar el intervalo que contiene un DAY comprimido
+    # ocultado. No llenar cualquier DAY|DAY, porque TradingView mantiene huecos
+    # como 24|26 sin insertar una hora artificial.
+    for my $dropped (@dropped_dates) {
+        my ($left, $right);
+        for my $item (@out) {
+            $left = $item if $item->{index} < $dropped->{index};
+            if ($item->{index} > $dropped->{index}) {
+                $right = $item;
+                last;
+            }
+        }
+        $try_add_between->($left, $right) if $left && $right;
+    }
+
+    return sort { $a->{index} <=> $b->{index} } (@out, @extra);
+}
+
+# _densify_sparse_gaps_in_time_axis_plan() — spec 0000h.
+# Después de construir un plan intradía válido, mide los huecos visuales entre
+# labels consecutivos. Si un hueco es demasiado grande (> 1.5x la cadencia
+# natural), intenta insertar un candidato real existente que reduzca el hueco
+# sin colisionar. El caso 14:30 entre 12:00 y 18:00 sale de esta regla general,
+# no de hardcodear la fecha/hora.
+sub _densify_sparse_gaps_in_time_axis_plan {
+    my ($self, $candidates, $plan, $cadence, $tf_minutes, $min_indices) = @_;
+    return @$plan if !defined($cadence) || $cadence >= 1440 || !$plan || @$plan < 2;
+
+    my @out = map { { %$_ } } @$plan;
+    my $natural_indices = int(($cadence / $tf_minutes) + 0.999);
+    my $gap_threshold = int($natural_indices * 1.5 + 0.999);
+
+    my %selected = map { $_->{index} => 1 } @out;
+    my @extra;
+
+    for (my $i = 0; $i < $#out; $i++) {
+        my $left  = $out[$i];
+        my $right = $out[$i + 1];
+        my $gap = $right->{index} - $left->{index};
+        next if $gap <= $gap_threshold;
+
+        # No densificar gaps entre dos anchors de día (session/weekend gaps).
+        next if $left->{is_date} && $right->{is_date};
+
+        my @pool = grep {
+            !$selected{$_->{index}}
+            && !$_->{is_date}
+            && ($_->{weight} || 0) >= 22
+            && $_->{index} > $left->{index}
+            && $_->{index} < $right->{index}
+            && $_->{index} - $left->{index} >= $min_indices
+            && $right->{index} - $_->{index} >= $min_indices
+        } @$candidates;
+
+        next unless @pool;
+
+        my $midpoint = ($left->{index} + $right->{index}) / 2;
+        my $best;
+        my $best_score;
+        for my $cand (@pool) {
+            my $dist_from_mid = abs($cand->{index} - $midpoint);
+            my $score = -$dist_from_mid * 10 + ($cand->{weight} || 0);
+            if (!defined $best_score || $score > $best_score) {
+                $best = { %$cand };
+                $best_score = $score;
+            }
+        }
+
+        if ($best) {
+            $best->{label} = 1;
+            $selected{$best->{index}} = 1;
+            push @extra, $best;
+        }
+    }
+
+    return sort { $a->{index} <=> $b->{index} } (@out, @extra);
+}
+
+# _plan_min_gap_px($plan) — spec 0000g
+# Retorna el menor gap en píxeles entre labels consecutivos del plan.
+sub _plan_min_gap_px {
+    my ($self, $plan, $cadence, $tf_minutes) = @_;
+    return undef if @$plan < 2;
+    my $min;
+    my $natural_indices = (defined $cadence && defined $tf_minutes && $tf_minutes > 0)
+        ? int(($cadence / $tf_minutes) + 0.999)
+        : 0;
+    for my $i (1 .. $#$plan) {
+        my $left  = $plan->[$i - 1];
+        my $right = $plan->[$i];
+        # Igual que TradingView, no invalidar el plan por anchors de día pegados
+        # cuando el gap de mercado está comprimido por índice lógico (ej. 26|27).
+        my $compressed_gap_limit = $natural_indices + int($natural_indices / 2 + 0.999);
+        next if $natural_indices > 0
+             && $left->{is_date} && $right->{is_date}
+             && ($right->{index} - $left->{index}) <= $compressed_gap_limit;
+        my $gap = $right->{x} - $left->{x};
+        $min = $gap if !defined($min) || $gap < $min;
+    }
+    return $min;
+}
+
+# _plan_is_consistent($plan) — spec 0000g
+# Verifica que no haya patrón DAY|HOUR|DAY|DAY|HOUR en segmentos internos.
+# Los gaps de sesión (días consecutivos sin horas entre ellos) son excepciones
+# aceptables solo en bordes. La inconsistencia se detecta cuando un segmento
+# interno tiene 0 horas mientras otros tienen >0.
+# También rechaza planes con 1 sola hora perdida entre muchos días (no es Modo A).
+sub _plan_is_consistent {
+    my ($self, $plan, $cadence, $tf_minutes) = @_;
+
+    my @day_pos;
+    for my $i (0 .. $#$plan) {
+        push @day_pos, $i if $plan->[$i]{is_date};
+    }
+
+    return 1 if @day_pos < 2;
+
+    my @hour_counts;
+    for my $i (1 .. $#day_pos) {
+        push @hour_counts, $day_pos[$i] - $day_pos[$i - 1] - 1;
+    }
+
+    my $has_hours = grep { $_ > 0 } @hour_counts;
+    my $has_zero  = grep { $_ == 0 } @hour_counts;
+
+    # spec 0000g: si hay horas pero son muy pocas frente a muchos días, no es Modo A.
+    # En zooms más alejados TradingView sí acepta ~1 hora por día (p.ej. 12:00),
+    # así que solo rechazamos planes realmente pobres: menos de media hora visible
+    # por anchor de día.
+    my $total_hours = grep { !$_->{is_date} } @$plan;
+    if (@day_pos >= 3 && $total_hours > 0 && $total_hours < int(@day_pos / 2)) {
+        return 0;
+    }
+
+    return 1 if !$has_hours || !$has_zero;
+
+    # Hay mezcla: algunos segmentos con horas, otros sin.
+    # Segmentos internos (no borde) con 0 horas son inconsistentes salvo
+    # que los días estén tan cerca que no quepa ninguna hora (gap de sesión).
+    for my $i (0 .. $#hour_counts) {
+        next if $i == 0 && $hour_counts[0] == 0;  # borde izquierdo
+        next if $i == $#hour_counts && $hour_counts[-1] == 0;  # borde derecho
+        if ($hour_counts[$i] == 0 && $has_hours) {
+            my $left  = $plan->[ $day_pos[$i] ];
+            my $right = $plan->[ $day_pos[$i + 1] ];
+            my $natural_indices = (defined $cadence && defined $tf_minutes && $tf_minutes > 0)
+                ? int(($cadence / $tf_minutes) + 0.999)
+                : 0;
+            # TradingView comprime gaps de sesión/weekend por índice lógico: dos días
+            # pueden quedar muy juntos (p.ej. 26|27) y no por eso debe caerse a
+            # modo diario. Si entre ambos anchors no cabría ni una marca de la
+            # cadencia elegida, se permite como gap comprimido interno.
+            my $compressed_gap_limit = $natural_indices + int($natural_indices / 2 + 0.999);
+            next if $natural_indices > 0 && ($right->{index} - $left->{index}) <= $compressed_gap_limit;
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+# debug_time_axis_snapshot() — wrapper mínimo hacia módulo removible de debug.
+# La lógica profesional vive en Market/Debug/TimeAxisSnapshot.pm para poder
+# eliminar/omitir el sistema de diagnóstico sin mezclarlo con el motor principal.
+sub debug_time_axis_snapshot {
+    my ($self, %opts) = @_;
+    require Market::Debug::TimeAxisSnapshot;
+    if (exists $opts{timeframe} || exists $opts{start_ts} || exists $opts{end_ts}
+        || exists $opts{start_index} || exists $opts{end_index} || exists $opts{visible_bars}) {
+        return Market::Debug::TimeAxisSnapshot->capture_range($self, %opts);
+    }
+    return Market::Debug::TimeAxisSnapshot->capture($self, %opts);
+}
+
+# _time_axis_weight_for_point($tm, $prev_tm) — spec 0000f
+# Asigna un peso temporal comparando el timestamp actual con el anterior real.
+# Inspirado en lightweight-charts/time-scale-point-weight-generator.ts.
+# Pesos: YEAR=70, MONTH=60, DAY=50, HOUR12=33, HOUR6=32, HOUR3=31,
+# HOUR1=30, MIN90=29, MIN30=22, MIN15=21.5, MIN5=21, MIN1=20.
+sub _time_axis_weight_for_point {
+    my ($self, $tm, $prev_tm) = @_;
+
+    if (defined $prev_tm) {
+        return 70 if $tm->year != $prev_tm->year;
+        return 60 if $tm->month != $prev_tm->month;
+        return 50 if $tm->day_of_month != $prev_tm->day_of_month;
+    }
+    elsif ($tm->hour == 0 && $tm->minute == 0) {
+        return 50;
+    }
+
+    my $m = $tm->hour * 60 + $tm->minute;
+    return 33   if $m % 720 == 0;
+    return 32   if $m % 360 == 0;
+    return 31   if $m % 180 == 0;
+    return 30   if $m % 60  == 0;
+    return 29   if $m % 90  == 0;
+    return 22   if $m % 30  == 0;
+    return 21.5 if $m % 15  == 0;
+    return 21   if $m % 5   == 0;
+    return 20;
+}
+
+# _time_axis_label_for_weight($tm, $weight) — spec 0000f
+# Formatea el texto del label del eje inferior según el peso temporal.
+# YEAR => "2026", MONTH => "Apr", DAY => "15", intradía => "HH:MM".
+sub _time_axis_label_for_weight {
+    my ($self, $tm, $weight) = @_;
+
+    return undef unless defined $tm && ref($tm) eq 'Time::Moment';
+
+    if ($weight >= 70) {
+        return sprintf("%04d", $tm->year);
+    }
+    elsif ($weight >= 60) {
+        my @months = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+        return $months[$tm->month - 1];
+    }
+    elsif ($weight >= 50) {
+        return sprintf("%d", $tm->day_of_month);
+    }
+    return sprintf("%02d:%02d", $tm->hour, $tm->minute);
 }
 
 # _time_label_for_index($tm, $is_date) — formatea el texto de UNA etiqueta del eje
@@ -1757,13 +2359,26 @@ sub _is_time_axis_boundary {
 sub _time_axis_interval_minutes {
     my ($self, $tf_minutes, $bar_w) = @_;
 
-    my @ladder = $tf_minutes == 1
-        ? (1, 5, 15, 60, 180, 720, 1440)
-        : $tf_minutes == 5
-            ? (5, 15, 60, 180, 720, 1440)
-            : (15, 30, 60, 90, 360, 720, 1440, 2880);
+    # Escaleras por fronteras reales tipo TradingView (spec 0000b). Cada candidato
+    # es >= tf_minutes y divisible por tf_minutes (salvo 90m que es multiple de
+    # 1/5/15). 5m omite 720/12h: el usuario observó que de 6h pasa a dias. 15m
+    # añade 2880/4320 (2D/3D) en zoom muy lejano. Las ramas 1h/2h/4h/D/W quedan
+    # preparadas para Fase 2 (no se invocan hoy porque _timeframe_minutes solo
+    # devuelve 1/5/15).
+    my @ladder;
+    if    ($tf_minutes == 1)     { @ladder = (1, 5, 15, 30, 60, 90, 180, 360, 720, 1440, 10080, 43200, 525600); }
+    elsif ($tf_minutes == 5)     { @ladder = (5, 15, 30, 60, 90, 180, 360, 1440, 10080, 43200, 525600); }
+    elsif ($tf_minutes == 15)    { @ladder = (15, 30, 60, 90, 180, 360, 1440, 2880, 4320, 10080, 43200, 525600); }
+    elsif ($tf_minutes == 60)    { @ladder = (60, 180, 360, 720, 1440, 10080, 43200, 525600); }
+    elsif ($tf_minutes == 120)   { @ladder = (120, 240, 360, 720, 1440, 10080, 43200, 525600); }
+    elsif ($tf_minutes == 240)   { @ladder = (240, 720, 1440, 10080, 43200, 525600); }
+    elsif ($tf_minutes == 1440)  { @ladder = (1440, 10080, 43200, 129600, 259200, 525600); }
+    elsif ($tf_minutes == 10080) { @ladder = (10080, 43200, 129600, 259200, 525600); }
+    else                         { @ladder = (1, 5, 15, 30, 60, 90, 180, 360, 720, 1440, 10080, 43200, 525600); }
+
     my $target_px = 100;
     for my $interval (@ladder) {
+        next if $interval < $tf_minutes;
         my $px = ($interval / $tf_minutes) * $bar_w;
         return $interval if $px >= $target_px;
     }
@@ -1783,6 +2398,34 @@ sub _time_label_for_index {
     }
 
     return sprintf("%02d:%02d", $tm->hour, $tm->minute);
+}
+
+# _local_abs_minutes($tm) — minutos absolutos en zona horaria local del timestamp.
+# Usado por compute_intraday_labels para detectar fronteras de reloj entre dos
+# timestamps cuando hay un gap de datos (spec 0000c). Es monótono en tiempo local
+# y alineado a medianoche local: como 1440 es divisible por todos los intervalos
+# intradía usados, los múltiplos de interval_minutes caen en fronteras de reloj.
+sub _local_abs_minutes {
+    my ($self, $tm) = @_;
+    return (($tm->year * 366 + $tm->day_of_year) * 1440 + $tm->hour * 60 + $tm->minute);
+}
+
+# _crosshair_date_label($tm) — etiqueta inferior del crosshair estilo TradingView
+# (spec 0000): 'Dow DD Mon 'YY', p.ej. "Thu 23 Apr '26".
+# Time::Moment->day_of_week es ISO 8601 (1=Lun .. 7=Dom), verificado con prueba
+# mínima sobre 2026-04-23 (dow=4 => Thu).
+sub _crosshair_date_label {
+    my ($self, $tm) = @_;
+
+    return undef unless defined $tm && ref($tm) eq 'Time::Moment';
+
+    my @dow = qw(Mon Tue Wed Thu Fri Sat Sun);
+    my @mon = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+    my $dow = $dow[ $tm->day_of_week - 1 ];
+    my $mon = $mon[ $tm->month - 1 ];
+    return undef unless defined $dow && defined $mon;
+
+    return sprintf("%s %02d %s '%02d", $dow, $tm->day_of_month, $mon, $tm->year % 100);
 }
 
 sub get_all_timestamps {

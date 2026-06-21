@@ -1,0 +1,323 @@
+PLATAFORMA DE TRADING
+SEGUNDA FASE DE DESARROLLO
+ESPECIFICACIÓN TÉCNICA DEL PROYECTO
+Total 20 puntos / 100
+TABLA DE CONTENIDOS
+1. Objetivos del Proyecto 
+2. Arquitectura General y de Packages Perl 
+3. Temporalidades y Sistema Replay 
+4. Módulo Integrado: SMC Structures, FVG & Liquidity 
+• 4.1. Definiciones Formales e Invariantes de Liquidez 
+• 4.2. Reglas de Confirmación y Detección Algorítmica 
+• 4.3. Máquina de Estados del Evento de Liquidez 
+• 4.4. Jerarquía Multi-Temporal y Reglas de Volumen Asociado 
+• 4.5. Reglas de Etiquetado y Visualización en Gráficas 
+5. Relación Estructural y de Concurrencia (Liquidity -> BOS -> CHoCH -> 
+FVG) 
+6. DIY Custom Strategy Builder 
+7. Perfil de Volumen Avanzado 
+8. Anchored VWAP 
+9. Cronograma de Entregables 
+1. OBJETIVOS DEL PROYECTO
+Extender  la  plataforma  de  trading  desarrollada  en  la  primera  fase  incorporando  nuevas
+temporalidades, sistema Replay, overlays avanzados basados en Smart Money Concepts (SMC),
+un  módulo  de liquidez unificado,  constructor de estrategias, Perfil de Volumen y Anchored
+VWAP. El objetivo primordial del módulo de liquidez es permitir que el sistema identifique,
+clasifique y visualice dinámicamente las estructuras de liquidez para utilizarlas como insumos
+de alta probabilidad en la toma de decisiones algorítmicas, de forma a identificar la región de
+ruido (no gausiana) y separarla de la zona efectivamente predecible (gausiana).
+2. ARQUITECTURA GENERAL Y DE PACKAGES
+Para optimizar el rendimiento y evitar cálculos redundantes sobre todo el historial de datos, los 
+indicadores de alta complejidad se implementarán estrictamente como Overlays. Los cálculos 
+en memoria se limitarán de forma estricta a las velas visibles en la interfaz de Perl/Tk más una 
+ventana de contexto indexada suficiente para validar estructuras pasadas.
+Tabla 1: Arquitectura de Packages del Sistema
+Package Responsabilidad Técnica
+Market/Indicators/
+SMC_Structures.pm
+Cálculo algorítmico subyacente de BOS, CHoCH, 
+FVG, niveles de Fibonacci y su integración nativa
+con los vectores de liquidez. 
+Market/Overlays/
+SMC_Structures.pm
+Renderizado gráfico en el Canvas de Perl/Tk de 
+las estructuras de mercado unificadas. 
+Market/Indicators/
+Liquidity.pm
+Motor de detección analítica de Swing Points, 
+EQH/EQL, Sweeps, Grabs y Runs, gestionando la 
+máquina de estados de liquidez. 
+Market/Overlays/
+Liquidity.pm
+Gestión del dibujado de líneas de liquidez, velas 
+de liquidez, etiquetas dinámicas y control de 
+visibilidad interactivo que se desarrollan con el 
+replay. 
+Package Responsabilidad Técnica
+Market/Indicators/
+Strategy_Builder.p
+m
+Procesamiento matemático y lógica de las 
+estrategias SuperTrend, HalfTrend, Range Filter, 
+Supply, Demand. 
+Market/Overlays/
+Strategy_Builder.p
+m
+Visualización en pantalla de las Estrategias. 
+3. TEMPORALIDADES Y SISTEMA REPLAY
+Temporalidades Soportadas
+El sistema operará con las siguientes temporalidades discretas: 1m, 5m, 
+15m, 1h, 2h, 4h, D y W. Los niveles calculados en temporalidades mayores 
+deben poder habilitarse opcionalmente en ventanas de menor temporalidad 
+(1m, 5m, 15m) para dotar al operador de un contexto macro en entornos 
+micro. 
+Mecánica del Sistema Replay
+• Durante la simulación en modo Replay, no se deben mostrar bajo 
+ninguna circunstancia velas futuras a la fecha/hora seleccionada. 
+• Todos los indicadores y overlays se recalcularán de forma dinámica 
+únicamente hasta la última vela visible en el puntero del Replay. 
+• Los controles de la interfaz Perl/Tk mapearán las funciones de: Inicio 
+Replay, Play, Pause, Step Forward, Step Backward, Fast Forward y Exit 
+Replay. 
+4. MÓDULO INTEGRADO: SMC STRUCTURES, FVG & 
+LIQUIDITY
+4.1. Definiciones Formales e Invariantes de Liquidez
+Swing Points (Puntos de Inflexión)
+Son las estructuras base para determinar los niveles donde se concentra el 
+flujo de órdenes del mercado. 
+• Swing High (Máximo Relevante): Ocurre en el índice de vela $i$ si 
+y solo si se cumplen las siguientes condiciones de vecindad con una 
+profundidad configurable $k$ (valor inicial recomendado k = 3): 
+• Swing Low (Mínimo Relevante): Ocurre en el índice de vela $i$ bajo
+la siguiente condición con profundidad $k$ (valor inicial recomendado 
+k = 3): 
+Etiquetas Buy Side Liquidity (BSL) y Sell Side Liquidity (SSL)
+• BSL: Liquidez acumulada por encima de máximos relevantes (Swing 
+Highs, Equal Highs o techos de rangos laterales). Representa las 
+órdenes de Buy Stop (stops de protección de vendedores en corto y 
+órdenes de compra de breakout traders). 
+• SSL: Liquidez acumulada por debajo de mínimos relevantes (Swing 
+Lows, Equal Lows o suelos de rangos laterales). Representa las órdenes
+de Sell Stop (stops de protección de compradores en largo). 
+Equal Highs (EQH) y Equal Lows (EQL)
+Dos pivotes distantes en el tiempo se consideran "iguales" cuando la 
+diferencia absoluta de sus extremos no supera un umbral de tolerancia 
+dinámico basado en la volatilidad del activo como el siguiente: 
+• Condición EQH: abs(high_1 - high_2) <= tolerancia
+• Condición EQL: abs(low_1 - low_2)  <=tolerancia 
+• Fórmula de Tolerancia: tolerancia = ATR * 0.10
+
+4.2. Reglas de Confirmación y Detección Algorítmica
+Tras la ruptura de un nivel válido de BSL o SSL, el sistema clasificará el 
+evento en una de las tres categorías de resolución mediante reglas estrictas 
+de cierre de vela: 
+1. Liquidity Sweep (Barrido Estándar): El precio rompe 
+temporalmente el Swing Point capturando las órdenes, pero la vela 
+regresa y cierra dentro del rango previo. 
+• Ejecución Alcista: High > BSL seguido de un Close < BSL. 
+• Ejecución Bajista: Low < SSL seguido de un Close > SSL. 
+2. Liquidity Grab (Caso Especial de Rechazo Rápido): Es un barrido 
+caracterizado por una alta velocidad y rechazo inmediato, sin 
+aceptación de precio fuera del nivel. La confirmación del retorno y el 
+rechazo debe ocurrir en un máximo de 3 velas posteriores a la 
+penetración inicial del nivel. 
+3. Liquidity Run (Expansión con Aceptación): Ocurre cuando el 
+precio rompe el nivel de liquidez y demuestra aceptación institucional 
+fuera de dicho nivel, continuando con el movimiento expansivo en la 
+misma dirección sin retornar de inmediato al rango. 
+• Confirmación Alcista: Al menos N velas consecutivas (valor 
+inicial N = 3$) cierran de forma estricta por encima del nivel de
+BSL barrido. 
+• Confirmación Bajista: Al menos $N$ velas consecutivas (valor 
+inicial N = 3$) cierran de forma estricta por debajo del nivel de 
+SSL barrido. 
+4.3. Máquina de Estados del Evento de Liquidez
+Cada estructura de liquidez detectada en el sistema debe evolucionar  a 
+través de un ciclo de vida gobernado por una máquina de estados 
+determinista como la siguiente: 
+• Estado 1 - Detected: El algoritmo identifica un nivel válido de BSL, 
+SSL, EQH o EQL y lo almacena en memoria. 
+• Estado 2 - Swept: El precio en tiempo real (o en modo Replay) ha 
+cruzado el extremo del nivel detectado (High > BSL o Low < SSL). 
+• Estado 3 - Acceptance: Se confirma que el precio mantiene cierres 
+fuera del nivel por el número de velas parametrizado (N). 
+• Estado 4 - Reclaimed: El precio no logra sostenerse fuera y el cierre 
+de la vela (o el cuerpo dentro del límite de 3 velas) regresa al rango 
+previo. 
+• Estado 5 - Resolved: El ciclo de vida del evento concluye. El nivel se 
+archiva con su clasificación final inmutable (Sweep, Grab o Run) para 
+servir como entrada a las reglas de mercado. 
+4.4. Jerarquía Multi-Temporal y Reglas de Volumen Asociado
+Pesado de Volumen Multi-Temporal
+Cada evento de liquidez registrado por el software debe calcular y almacenar
+en su estructura de datos el volumen transaccionado observado en los 
+marcos temporales inferiores de 1m, 5m y 15m. Esta persistencia es 
+obligatoria e independiente de la temporalidad macro en la que se encuentre 
+navegando el usuario (ej. si el usuario visualiza el gráfico en 1H, 4H o D, el 
+motor del package extraerá los volúmenes agregados de las sub-velas de 
+
+menor rango). Estos datos actuarán como pesos de importancia relativa para 
+filtrar niveles institucionales reales de ruido de mercado.
+Clasificación de Liquidez por Origen
+• Internal Liquidity (Liquidez Interna): Niveles generados y 
+detectados dentro de la misma temporalidad activa en el gráfico del 
+usuario (ejemplo: operando en 5m con niveles de 5m). 
+• External Liquidity (Liquidez Externa): Niveles clave originados en 
+marcos temporales superiores (HTF) que se proyectan en el gráfico 
+actual (ejemplo: usuario analizando en 5m pero visualizando la liquidez
+proveniente de 15m, 1H, 4H, D o W). 
+4.5. Reglas de Etiquetado y Visualización en Gráficas
+El archivo Market/Overlays/Liquidity.pm renderizará los elementos visuales 
+empleando los estilos estrictos de la siguiente tabla, permitiendo además su 
+activación o desactivación individual desde el menú de opciones de la 
+interfaz de usuario: 
+Tabla 2: Parámetros de Diseño y Etiquetas del Overlay
+Elemento 
+Estructural
+Estilo de Línea / 
+Gráfico
+Código de 
+Color
+Texto de la
+Etiqueta
+Buy Side Liquidity
+(BSL)
+Horizontal 
+discontinua / 
+punteada 
+Rojo BSL 
+Sell Side Liquidity
+(SSL)
+Horizontal 
+discontinua / 
+punteada 
+Verde SSL 
+Equal Highs (EQH) Línea que conecta 
+ambos máximos 
+Configurabl
+e EQH 
+Equal Lows (EQL) Línea que conecta 
+ambos mínimos 
+Configurabl
+e EQL 
+Sweep Up 
+(Barrido de 
+Marcador / Línea 
+de quiebre 
+Rojo SWEEP ↑ 
+Elemento 
+Estructural
+Estilo de Línea / 
+Gráfico
+Código de 
+Color
+Texto de la
+Etiqueta
+Máximos)
+Sweep Down 
+(Barrido de 
+Mínimos)
+Marcador / Línea 
+de quiebre Verde SWEEP ↓ 
+Liquidity Grab Destacado de 
+rechazo rápido Naranja LQ GRAB 
+Liquidity Run Extensión de 
+ruptura de nivel Azul LQ RUN 
+El sistema deberá comportarse de forma equivalente a las herramientas de 
+liquidez presentes en:
+ TradingView SMC
+ LuxAlgo Smart Money Concepts
+ ICT Concepts
+ Smart Money Setup
+La detección deberá actualizarse dinámicamente conforme nuevas velas 
+ingresen al mercado.
+5. RELACIÓN ESTRUCTURAL Y DE CONCURRENCCIA
+Una vez resuelto y clasificado un evento por la máquina de estados de 
+liquidez, el sistema modificará internamente los pesos de probabilidad para 
+la confirmación de quiebres estructurales en el package principal 
+SMC_Structures.pm: 
+• Si la resolución es un Sweep: Se incrementará drásticamente el 
+peso de probabilidad para la formación inminente de un CHoCH 
+(Change of Character / Cambio de Carácter) en la dirección contraria al
+barrido, validando giros de mercado de alta precisión. 
+• Si la resolución es un Liquidity Run: Se validará la fuerza de la 
+tendencia, asignando una probabilidad mayor a la confirmación de un 
+BOS (Break of Structure / Rompimiento de Estructura) tras la ruptura 
+del siguiente pivote estructural. 
+• Si la resolución es un Liquidity Grab: Al denotar una absorción 
+institucional inmediata de órdenes, el sistema emitirá una alerta visual 
+de Reversal estructural de corto/mediano plazo. 
+Los bloques FVG (Fair Value Gap) formados en la vela del barrido o 
+inmediatamente posterior a un Sweep/Grab adquirirán la etiqueta de "Zonas 
+de Alta Reacción", sirviendo como puntos optimizados para el gatillo de 
+órdenes del constructor de estrategias. 
+6. DIY CUSTOM STRATEGY BUILDER
+El constructor de estrategias procesará en tiempo real las reglas de entrada y
+salida combinando los indicadores técnicos y de volumen. 
+Tabla 3: Componentes del Strategy Builder
+Componente 
+Técnico Requerimiento de Comportamiento Algorítmico
+SuperTrend Cálculo y actualización dinámica por vela cerrada en 
+base al multiplicador ATR. 
+HalfTrend Determinación dinámica de la dirección de la 
+tendencia y filtros de reversión. 
+Range Filter Suavizado dinámico del precio para aislar fases de 
+acumulación/distribución. 
+Supply Zones Persistencia en memoria de bloques de órdenes de 
+venta validados por volumen. 
+Demand Zones Persistencia en memoria de bloques de órdenes de 
+compra validados por volumen. 
+7. PERFIL DE VOLUMEN AVANZADO
+El cálculo del perfil de volumen se estructurará de acuerdo con los siguientes 
+modos operativos basados en pivots analíticos para proyectar de forma 
+horizontal el POC (Point of Control), el VAH (Value Area High) y el VAL 
+(Value Area Low): 
+• Modo Por Sesión: El cálculo se inicializa y segmenta de forma fija con
+la apertura cronológica de cada sesión configurada. 
+• Modo Por BOS / CHoCH: El perfil acumula y distribuye el volumen 
+tomando como anclajes de inicio y fin los eventos confirmados en 
+temporalidades 1H, 2H, 4H, D y W. 
+• Modo Por Velas Históricas del Pasado Lejano: Mecanismo de 
+contingencia activado automáticamente cuando no existan datos o 
+velas en el pasado reciente del activo, ejecutando el cálculo por el 
+inicio de sesión lejana o por eventos macro confirmados en las 
+temporalidades HTF previamente descritas. 
+8. ANCHORED VWAP
+El cálculo del Precio Promedio Ponderado por Volumen Anclado (Anchored 
+VWAP) reinicializará sus sumas acumuladas de volumen y precio ponderado 
+de forma estricta al detectar los siguientes eventos de mercado o pivots de 
+anclaje de la plataforma: 
+1. Inicio de Sesión: Anclaje directo al primer tick o vela de la sesión de 
+trading activa. 
+2. Apertura de Mercado: Anclaje coincidente con la apertura oficial del 
+mercado del activo. 
+3. BOS Confirmado: Inicialización en la vela exacta donde el indicador 
+unificado valida un Break of Structure. 
+4. CHoCH Confirmado: Inicialización en la vela exacta donde se 
+confirma el Change of Character. 
+5. Por Volume Profile: Anclaje dinámico coordinado con el nodo de 
+mayor concentración de volumen (POC) determinado por el perfil. 
+9. CRONOGRAMA DE ENTREGABLES
+El desarrollo se evaluará de acuerdo con los plazos estrictos y el contenido 
+mínimo exigido en la siguiente planeación institucional: 
+Tabla 4: Hitos y Entregables del Proyecto
+Fecha Entregable Contenido Mínimo Técnico Exigido
+29/06 Primera 
+Presentación 
+Motor base de soporte para múltiples 
+temporalidades, sistema Replay funcional sin
+filtración de velas futuras, arquitectura base 
+de Overlays gráficos y entrega de los 
+avances del motor analítico de SMC con sus 
+etiquetas ubicadas en el tiemp, FVG con el 
+desvanecimiento progresivo en el tiempo, y 
+el módulo de liquidez debidamente 
+implementados.
+13/07 Segunda 
+Presentación 
+Sistema SMC unificado completo (Estructuras
++ FVG + Máquina de Estados de Liquidez 
+interactiva con pesado multi-temporal), DIY 
+Custom Strategy Builder operativo, Perfil de 
+Volumen avanzado con modos de 
+contingencia y Anchored VWAP multipivot. 
