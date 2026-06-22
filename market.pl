@@ -158,114 +158,70 @@ my %tf_cb  = map { $_ => Market::UI::Callbacks->make_tf_callback($chart_engine, 
              Market::UI::Callbacks->timeframes();
 
 # ============================================================================
-# 5. MENUBAR SUPERIOR (todo el control sin saturar) — task 0018 F2
+# 5. BARRA DE CONTROLES INLINE (todo en la MISMA ventana) — task 0018b
 # ============================================================================
-my $menubar = $mw->Menu(-type => 'menubar');
-$mw->configure(-menu => $menubar);
+# IMPORTANTE: NO se usa menubar nativo ($mw->Menu/-menu) ni Optionmenu. Bajo
+# WSLg ambos abren ventanas X separadas (popups), que aparecen en posiciones
+# erráticas, se traban o no cargan. Todos los controles van inline con widgets
+# que NO crean ventanas: Radiobutton, Checkbutton, Button. La barra se organiza
+# en dos filas para no saturar.
+my $row1 = $frame_controles->Frame()->pack(-side => 'top', -fill => 'x', -pady => 1);
+my $row2 = $frame_controles->Frame()->pack(-side => 'top', -fill => 'x', -pady => 1);
 
-# --- Menú Temporalidad ---
-my $m_tf = $menubar->cascade(-label => 'Temporalidad', -tearoff => 0);
-for my $tf (Market::UI::Callbacks->timeframes()) {
-    $m_tf->radiobutton(
-        -label => Market::UI::Callbacks->tf_label($tf),
-        -value => $tf, -variable => \$active_tf,
-        -command => sub { $tf_cb{$tf}->(); },
-    );
-}
-
-# --- Menú Capas ---
-my $m_cap = $menubar->cascade(-label => 'Capas', -tearoff => 0);
-$m_cap->checkbutton(
-    -label => 'SMC (estructura: BOS/CHoCH/FVG/Fib)',
-    -variable => \$vis_smc,
-    -command => sub { $cb_smc->($vis_smc ? 1 : 0); },
-);
-$m_cap->checkbutton(
-    -label => 'Liquidez (BSL/SSL/EQH/EQL/SWEEP/GRAB/RUN)',
-    -variable => \$vis_liq,
-    -command => sub { $cb_liq->($vis_liq ? 1 : 0); },
-);
-$m_cap->separator;
-my $m_elem = $m_cap->cascade(-label => 'Elementos de liquidez', -tearoff => 0);
-for my $elem (qw(BSL SSL EQH EQL SWEEP GRAB RUN)) {
-    $m_elem->checkbutton(
-        -label => $elem, -variable => \$vis_elem{$elem},
-        -command => sub { $cb_elem{$elem}->($vis_elem{$elem} ? 1 : 0); },
-    );
-}
-$m_cap->separator;
-$m_cap->checkbutton(
-    -label => 'Niveles HTF sobre LTF',
-    -variable => \$htf_enabled,
-    -command => sub { $cb_htf->($htf_enabled ? 1 : 0); },
-);
-$m_cap->separator;
-$m_cap->checkbutton(-label => 'Strategy (próximamente)', -state => 'disabled');
-$m_cap->checkbutton(-label => 'Volume Profile (próximamente)', -state => 'disabled');
-$m_cap->checkbutton(-label => 'Anchored VWAP (próximamente)', -state => 'disabled');
-
-# --- Menú Replay ---
-my $m_rep = $menubar->cascade(-label => 'Replay', -tearoff => 0);
-$m_rep->command(-label => 'Inicio Replay', -command => Market::UI::Callbacks->make_replay_start($chart_engine, \%ui_vars));
-$m_rep->command(-label => 'Play',          -command => Market::UI::Callbacks->make_replay_play($chart_engine, $mw, \%ui_vars));
-$m_rep->command(-label => 'Pause',         -command => Market::UI::Callbacks->make_replay_pause($chart_engine, \%ui_vars));
-$m_rep->command(-label => 'Step adelante', -command => Market::UI::Callbacks->make_replay_step_fwd($chart_engine));
-$m_rep->command(-label => 'Step atrás',    -command => Market::UI::Callbacks->make_replay_step_back($chart_engine));
-$m_rep->command(-label => 'Fast Forward',  -command => Market::UI::Callbacks->make_replay_fast_fwd($chart_engine, $mw, \%ui_vars));
-$m_rep->separator;
-$m_rep->command(-label => 'Salir del Replay', -command => Market::UI::Callbacks->make_replay_exit($chart_engine, \%ui_vars));
-
-# --- Menú Escala ---
-my $m_sc = $menubar->cascade(-label => 'Escala', -tearoff => 0);
-$m_sc->radiobutton(-label => 'Precio: Auto',   -value => 'auto',   -variable => \$scale_mode, -command => sub { $chart_engine->set_scale_mode('auto') });
-$m_sc->radiobutton(-label => 'Precio: Manual', -value => 'manual', -variable => \$scale_mode, -command => sub { $chart_engine->set_scale_mode('manual') });
-$m_sc->separator;
-$m_sc->radiobutton(-label => 'ATR: Auto',   -value => 'auto',   -variable => \$atr_scale_mode, -command => sub { $chart_engine->set_atr_scale_mode('auto') });
-$m_sc->radiobutton(-label => 'ATR: Manual', -value => 'manual', -variable => \$atr_scale_mode, -command => sub { $chart_engine->set_atr_scale_mode('manual') });
-$m_sc->separator;
-$m_sc->command(-label => 'Reset Vista', -command => sub { $chart_engine->reset_view() });
-
-# ============================================================================
-# 6. BARRA INFERIOR COMPACTA (lo esencial, siempre visible) — task 0018 F2/F5
-# ============================================================================
-# --- TF: Optionmenu compacto con ancho fijo ---
-my $tf_box = $frame_controles->Frame(-relief => 'groove', -bd => 2)->pack(-side => 'left', -padx => 4, -pady => 2);
+# --- Fila 1: Temporalidad (8 radiobuttons, sin popup) ---
+my $tf_box = $row1->Frame(-relief => 'groove', -bd => 2)->pack(-side => 'left', -padx => 4);
 $tf_box->Label(-text => 'TF:')->pack(-side => 'left', -padx => 3);
-my @tf_labels = map { Market::UI::Callbacks->tf_label($_) } Market::UI::Callbacks->timeframes();
-my %label_to_tf = map { Market::UI::Callbacks->tf_label($_) => $_ } Market::UI::Callbacks->timeframes();
-$tf_box->Optionmenu(
-    -width => 4,
-    -options => [ map { [ $_ => $_ ] } @tf_labels ],
-    -textvariable => \$active_tf,
-    -command => sub {
-        my ($label) = @_;
-        my $tf = $label_to_tf{$label} || $label;
-        ($tf_cb{$tf} || sub {})->();
-    },
-)->pack(-side => 'left', -padx => 2);
+for my $tf (Market::UI::Callbacks->timeframes()) {
+    $tf_box->Radiobutton(
+        -text => Market::UI::Callbacks->tf_label($tf),
+        -value => $tf, -variable => \$active_tf,
+        -indicatoron => 0, -padx => 4, -pady => 1,
+        -command => sub { $tf_cb{$tf}->(); },
+    )->pack(-side => 'left', -padx => 1);
+}
 
-# --- Precio Auto/Manual ---
-my $price_box = $frame_controles->Frame(-relief => 'groove', -bd => 2)->pack(-side => 'left', -padx => 4, -pady => 2);
-$price_box->Label(-text => 'Precio:')->pack(-side => 'left', -padx => 3);
-$price_box->Radiobutton(-text => 'Auto', -value => 'auto', -variable => \$scale_mode,
-    -command => sub { $chart_engine->set_scale_mode('auto') })->pack(-side => 'left');
-$price_box->Radiobutton(-text => 'Man', -value => 'manual', -variable => \$scale_mode,
-    -command => sub { $chart_engine->set_scale_mode('manual') })->pack(-side => 'left');
-
-# --- Capas rápidas (SMC / Liquidez) con su variable explícita ---
-my $cap_box = $frame_controles->Frame(-relief => 'groove', -bd => 2)->pack(-side => 'left', -padx => 4, -pady => 2);
+# --- Fila 1: Capas (SMC / Liquidez completas) ---
+my $cap_box = $row1->Frame(-relief => 'groove', -bd => 2)->pack(-side => 'left', -padx => 4);
 $cap_box->Label(-text => 'Capas:')->pack(-side => 'left', -padx => 3);
 $cap_box->Checkbutton(-text => 'SMC', -variable => \$vis_smc,
     -command => sub { $cb_smc->($vis_smc ? 1 : 0); })->pack(-side => 'left');
 $cap_box->Checkbutton(-text => 'Liquidez', -variable => \$vis_liq,
     -command => sub { $cb_liq->($vis_liq ? 1 : 0); })->pack(-side => 'left');
 
-# --- Reset Vista (siempre accesible — F5) ---
-$frame_controles->Button(-text => 'Reset Vista', -command => sub { $chart_engine->reset_view() })
-    ->pack(-side => 'left', -padx => 8);
+# --- Fila 1: Elementos de liquidez (sub-filtros) ---
+my $elem_box = $row1->Frame(-relief => 'groove', -bd => 2)->pack(-side => 'left', -padx => 4);
+$elem_box->Label(-text => 'Liq:')->pack(-side => 'left', -padx => 3);
+for my $elem (qw(BSL SSL EQH EQL SWEEP GRAB RUN)) {
+    $elem_box->Checkbutton(-text => $elem, -variable => \$vis_elem{$elem},
+        -command => sub { $cb_elem{$elem}->($vis_elem{$elem} ? 1 : 0); })->pack(-side => 'left');
+}
 
-# --- Replay compacto a la derecha + etiqueta de estado ---
-my $rep_box = $frame_controles->Frame(-relief => 'groove', -bd => 2)->pack(-side => 'right', -padx => 4, -pady => 2);
+# --- Fila 1: HTF ---
+$row1->Checkbutton(-text => 'HTF sobre LTF', -variable => \$htf_enabled,
+    -command => sub { $cb_htf->($htf_enabled ? 1 : 0); })->pack(-side => 'left', -padx => 6);
+
+# --- Fila 2: Precio Auto/Manual ---
+my $price_box = $row2->Frame(-relief => 'groove', -bd => 2)->pack(-side => 'left', -padx => 4);
+$price_box->Label(-text => 'Precio:')->pack(-side => 'left', -padx => 3);
+$price_box->Radiobutton(-text => 'Auto', -value => 'auto', -variable => \$scale_mode,
+    -indicatoron => 0, -padx => 5, -command => sub { $chart_engine->set_scale_mode('auto') })->pack(-side => 'left', -padx => 1);
+$price_box->Radiobutton(-text => 'Manual', -value => 'manual', -variable => \$scale_mode,
+    -indicatoron => 0, -padx => 5, -command => sub { $chart_engine->set_scale_mode('manual') })->pack(-side => 'left', -padx => 1);
+
+# --- Fila 2: ATR Auto/Manual ---
+my $atr_box = $row2->Frame(-relief => 'groove', -bd => 2)->pack(-side => 'left', -padx => 4);
+$atr_box->Label(-text => 'ATR:')->pack(-side => 'left', -padx => 3);
+$atr_box->Radiobutton(-text => 'Auto', -value => 'auto', -variable => \$atr_scale_mode,
+    -indicatoron => 0, -padx => 5, -command => sub { $chart_engine->set_atr_scale_mode('auto') })->pack(-side => 'left', -padx => 1);
+$atr_box->Radiobutton(-text => 'Manual', -value => 'manual', -variable => \$atr_scale_mode,
+    -indicatoron => 0, -padx => 5, -command => sub { $chart_engine->set_atr_scale_mode('manual') })->pack(-side => 'left', -padx => 1);
+
+# --- Fila 2: Reset Vista (siempre accesible — F5) ---
+$row2->Button(-text => 'Reset Vista', -command => sub { $chart_engine->reset_view() })
+    ->pack(-side => 'left', -padx => 10);
+
+# --- Fila 2: Replay (7 controles, sin popup) + estado ---
+my $rep_box = $row2->Frame(-relief => 'groove', -bd => 2)->pack(-side => 'left', -padx => 4);
 $rep_box->Label(-text => 'Replay:')->pack(-side => 'left', -padx => 3);
 my %rep_btn = (
     'Inicio' => Market::UI::Callbacks->make_replay_start($chart_engine, \%ui_vars),
@@ -277,7 +233,7 @@ my %rep_btn = (
     'Salir'  => Market::UI::Callbacks->make_replay_exit($chart_engine, \%ui_vars),
 );
 for my $lbl ('Inicio', 'Play', 'Pause', '<', '>', '>>', 'Salir') {
-    $rep_box->Button(-text => $lbl, -command => $rep_btn{$lbl}, -padx => 2)
+    $rep_box->Button(-text => $lbl, -command => $rep_btn{$lbl}, -padx => 3)
         ->pack(-side => 'left', -padx => 1);
 }
 

@@ -73,6 +73,27 @@ Este documento REGISTRA todos los fallos observados para no repetirlos, y define
 visible. Si no hay overlay registrado (tests t/16), alimenta igual (preserva el test). En
 producción, con overlays OFF al inicio, no se alimenta nada pesado → arranque instantáneo.
 
+## Actualización 0018b (segunda validación visual)
+
+Tras el primer rediseño, la validación visual reveló dos fallos NUEVOS por widgets que abren
+ventanas X separadas bajo WSLg:
+
+### F6 — Menubar nativo abre popups erráticos
+- **Síntoma:** los menús (Temporalidad/Capas/Replay/Escala) abrían una ventana Linux aparte que
+  aparecía en posiciones distintas, tardaba, se trababa o no cargaba.
+- **Causa:** `$mw->Menu(-type=>menubar)` + `cascade` usan ventanas toplevel del WM; bajo WSLg el
+  manejo de popups es inestable.
+- **Fix:** ELIMINADO el menubar. Todos los controles van INLINE en la ventana, en dos filas,
+  con Radiobutton/Checkbutton/Button (no crean ventanas).
+
+### F7 — Optionmenu de TF recortado y con popup
+- **Síntoma:** el selector "TF: 1m 1m" con letras entrecortadas y sin responder bien.
+- **Causa:** `Optionmenu` también despliega un popup (mismo problema que el menubar).
+- **Fix:** reemplazado por 8 Radiobutton con `-indicatoron=>0` (estilo botón), sin popup.
+
+Verificación: los 18 callbacks de la barra (8 TF, SMC/Liq ON-OFF-ON, elemento liquidez, HTF, y los
+7 de Replay) probados por script contra el ReplayController real → 18/18 ok. 672/672 PASS.
+
 ## Qué NO romper
 - Las factorías de `Market/UI/Callbacks.pm` NO cambian su firma (`($on)` explícito) → t/17 verde.
 - `sync_overlay_indicators` debe seguir alimentando en t/16 (donde no hay overlay registrado).
