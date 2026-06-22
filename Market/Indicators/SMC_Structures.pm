@@ -465,6 +465,11 @@ sub _detect_and_mitigate_fvgs {
             $fvg->{mitig} = 1 - ($fvg->{hi} - $fvg->{lo}) / $orig;
         }
     }
+
+    # ponytail: prune inactive FVGs so the mitigation loop stays O(active) not O(total).
+    # _active only goes 1→0 (never reactivated); get_fvg() already filters to active only.
+    $self->{_fvgs} = [ grep { $_->{_active} } @{ $self->{_fvgs} } ];
+
     return;
 }
 

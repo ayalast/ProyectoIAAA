@@ -4,16 +4,15 @@ Clasificada por severidad. No se resuelve aquí; solo se documenta. Última act.
 
 ## Crítico
 
-### SMC_Structures se cuelga ~37s en el dataset real — task 0017 abierta
-- **Descripción:** mismo patrón O(n²) que Liquidity (0016): `_detect_and_mitigate_fvgs` es el 84%
-  del tiempo; el array `_fvgs` crece sin límite (1621 FVGs a 8000 velas) y el loop de mitigación
-  recorre TODOS los FVGs en cada vela, incluidos los inactivos que nunca se podan.
-- **Perfilado (arquitecto):** SMC feed 29888 velas = 37.6s; `_detect_and_mitigate_fvgs` 84%.
-  Arranque total app = ~48s (SMC 37.6 + Liquidity 10.3). La app abre pero congelada ~48s.
-- **Impacto:** BLOQUEA la 1ª entrega igual que 0016 (el usuario ve ventana en blanco ~48s).
-- **Recomendación:** task `0017-smc-performance-fix.md` (podar FVGs inactivos; índice por vela
-  para mitigación). Mismo patrón ya resuelto en 0016.
-- **¿Bloquea?:** sí. Resolver antes de validación visual.
+(Sin críticas abiertas. El arranque con el dataset real quedó en ~8.4s tras 0016+0017.)
+
+### [RESUELTO 2026-06-22] SMC_Structures se colgaba ~37s en el dataset real — task 0017
+- **Era:** `_detect_and_mitigate_fvgs` (84%) recorría `_fvgs` entero por vela; FVGs inactivos nunca
+  se podaban → O(n²).
+- **Fix:** poda `_fvgs` a solo `_active` tras el loop de mitigación (+5 líneas). `get_fvg` ya filtraba
+  → salida idéntica; poda en `update_last`, no en getters → idempotencia de 0014 intacta. SMC feed
+  29888 velas: 37.6s → 2.9s. Arranque total app: ~48s → **8.4s** (verificado por arquitecto; el log
+  real ya pasa de "Render geometry" a "Ejecutando renderizado inicial"). 661 PASS.
 
 ### [RESUELTO 2026-06-21] La app se colgaba al abrir con el dataset real — Liquidity, task 0016
 - **Era:** `_sum_volume_for_tf` recorría el array completo del TF parseando `Time::Moment` por vela
@@ -76,6 +75,14 @@ Clasificada por severidad. No se resuelve aquí; solo se documenta. Última act.
 - **¿Bloquea escalabilidad?:** sí.
 
 ## Medio
+
+### Tests de cota por tiempo (0016/0017) son flaky bajo contención de CPU
+- **Descripción:** los tests de rendimiento (`elapsed < N s` con `Time::HiRes`) en `t/09`/`t/10`
+  pueden dar falso negativo si la máquina está muy cargada (se observó una corrida de `prove -l t`
+  en 34s con un FALLO espurio del cota, mientras 3 corridas normales pasaron en ~16-21s).
+- **Impacto:** bajo. La lógica es correcta; el riesgo es un rojo ocasional en CI/local cargado.
+- **Recomendación:** umbrales holgados (ya aplicado: 5s real medido ~0.1-3s), o marcar estos tests
+  como informativos/`TODO` si la flakiness molesta. No bloquea la entrega.
 
 ### Detección SMC (FVG/CHoCH) — primera versión funcional, simplificaciones conocidas
 - **Descripción:** `Market/Indicators/SMC_Structures.pm` (tasks 0005–0007) pasa 317 tests, pero
