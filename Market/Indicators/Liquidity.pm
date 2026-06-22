@@ -56,6 +56,8 @@ sub new {
         _last_close=> undef,
         _last_atr  => undef,
         _atr_count => 0,
+        # PERF (task 0016): highest index with a defined ATR value (O(1) _get_atr_at fast path).
+        _last_defined_atr_idx => undef,
         _levels    => [],
         _eqh_pairs => {},
         _eql_pairs => {},
@@ -68,6 +70,19 @@ sub new {
         _zones     => [],
         _active_tf => '1m',
         _zone_seen => {},
+        # PERF (task 0016): incremental cursor into _levels for Zone-2 detection. Zone-2 is
+        # protected by _zone_seen so previously-processed levels never re-emit; the old code
+        # re-scanned the WHOLE _levels array every candle (O(N²)). This cursor processes only
+        # the newly appended levels, producing byte-identical zone output.
+        _zone2_cursor => 0,
+        # task 0016 (perf): caches perezosas por TF para _sum_volume_for_tf.
+        #   _epoch_cache{$tf}[i] = epoch de la vela i del array de TF (parseado 1 sola vez)
+        #   _volsum_cache{$tf}[i] = suma de vol[0..i-1] (prefix-sum, [0]=0)
+        #   _epoch_cache_size{$tf} = nº de velas cacheadas (invalidación por longitud)
+        # Se invalidan en reset() y se reconstruyen cuando el array del TF crece.
+        _epoch_cache      => {},
+        _volsum_cache     => {},
+        _epoch_cache_size => {},
     };
     bless $self, $class;
     return $self;
@@ -139,22 +154,47 @@ sub _update_atr {
     if ($self->{_atr_count} < $period) {
         $self->{_tr_sum} += $tr;
         $self->{_atr_vals}->[$index] = undef;
+        # Seed phase: no defined ATR yet.
     } elsif ($self->{_atr_count} == $period) {
         $self->{_tr_sum} += $tr;
         my $atr = $self->{_tr_sum} / $period;
         $self->{_last_atr} = $atr;
         $self->{_atr_vals}->[$index] = $atr;
+        # PERF (task 0016): track the highest index where an ATR is defined so _get_atr_at
+        # can be O(1) in the common (sequential-feed) path instead of scanning back O(n).
+        $self->{_last_defined_atr_idx} = $index;
     } else {
         my $atr = ($self->{_last_atr} * ($period - 1) + $tr) / $period;
         $self->{_last_atr} = $atr;
         $self->{_atr_vals}->[$index] = $atr;
+        $self->{_last_defined_atr_idx} = $index;
     }
     $self->{_last_close} = $close;
     return;
 }
 
+# _get_atr_at($index) — the ATR value at or just before $index (Wilder ATR is forward-filled).
+# PERF (task 0016): the old loop scanned back from $index every call, which is O(n) per swing
+# and became a hotspot once the volume bottleneck was fixed. Because ATR is fed sequentially
+# candle-by-candle and every candle past the seed phase has a defined ATR at its own index, the
+# most-recent-defined ATR at or before $index is exactly the one cached here (or at $index itself
+# during normal forward operation). We keep the O(n) fallback for the edge case where $index
+# precedes the cached value (e.g. random-access lookups), which does not happen in production.
 sub _get_atr_at {
     my ($self, $index) = @_;
+    my $arr = $self->{_atr_vals};
+    return undef unless defined $index && $index >= 0;
+    my $v = $arr->[$index];
+    return $v if defined $v;
+    my $last = $self->{_last_defined_atr_idx};
+    if (defined $last && $last < $index) {
+        # $index is in the seed gap or after the last defined ATR (shouldn't happen post-seed).
+        return $self->{_last_atr};
+    }
+    if (defined $last && $last <= $index) {
+        return $self->{_atr_vals}->[$last];
+    }
+    # Fallback: scan back (preserves the original semantics exactly).
     for my $i (reverse 0 .. $index) {
         return $self->{_atr_vals}->[$i] if defined $self->{_atr_vals}->[$i];
     }
@@ -357,6 +397,17 @@ sub _update_fsm {
             }
         }
     }
+
+    # PERF (task 0016): prune Resolved levels from _active_levels so the FSM loop only
+    # iterates live levels. A resolved level is never re-opened (its event is already in
+    # _events); keeping it made the loop O(n²) on long datasets (1138 stale levels after
+    # 6000 candles). get_active_levels() already filtered Resolved, so this is a pure
+    # performance optimisation with identical external behaviour.
+    if (grep { $_->{state} eq 'Resolved' } @{ $self->{_active_levels} }) {
+        $self->{_active_levels} = [
+            grep { $_->{state} ne 'Resolved' } @{ $self->{_active_levels} }
+        ];
+    }
     return;
 }
 
@@ -414,6 +465,17 @@ sub _compute_event_meta {
 #   candle would start (ts_end_next).
 #   We include any sub-candle of the target $tf whose bucket starts at or after $ts_start_str and strictly
 #   before $ts_end_next (i.e. ts_start <= ts < ts_end_next).
+#
+# PERF (task 0016): the array of a TF can hold ~30000 candles, and this method is called once per resolved
+# event per TF (~1086 calls in 2000 candles). The old implementation parsed Time::Moment->from_string on
+# every candle in every call → O(events × candles) with a huge constant (96% of the runtime profiled).
+# Now we:
+#   1. Cache the epoch array per TF (parsed once), built lazily and reused across calls. Invalidation is by
+#      array length (a growing array triggers a rebuild; arrays are append-only so old entries stay valid).
+#   2. Cache a prefix-sum of volume per TF, so the sum over a sub-range is a single subtraction.
+#   3. Binary-search the bounds [ts_start_epoch, ts_end_next_epoch) on the epoch array (chronologically
+#      sorted by construction). Net: O(log n) per call instead of O(n).
+# Semantics are byte-for-byte identical to the previous loop (same inclusivity, same upper boundary).
 sub _sum_volume_for_tf {
     my ($self, $tf, $ts_start_str, $ts_end_str) = @_;
     my $md = $self->{_market_data};
@@ -452,17 +514,73 @@ sub _sum_volume_for_tf {
     }
     my $ts_end_next_epoch = $tm_end_next->epoch;
 
-    my $total = 0;
-    for my $c (@$arr) {
-        next unless $c && defined $c->[0];
-        my $tm = eval { Time::Moment->from_string($c->[0]) };
-        next unless $tm;
-        my $epoch = $tm->epoch;
-        if ($epoch >= $ts_start_epoch && $epoch < $ts_end_next_epoch) {
-            $total += $c->[5] if defined $c->[5];
+    # Lazily build (or extend) the per-TF epoch + prefix-sum caches.
+    # Arrays are append-only, so we extend the cache from the last cached length to the current length.
+    my $epochs  = $self->{_epoch_cache}->{$tf};
+    my $volsum  = $self->{_volsum_cache}->{$tf};
+    my $cached_n = $self->{_epoch_cache_size}->{$tf} // 0;
+    my $n = scalar(@$arr);
+    if (!defined $epochs) {
+        $epochs = [];
+        $volsum = [0];
+        $cached_n = 0;
+    }
+    if ($cached_n > $n) {
+        # Defensive: array shrank (reset elsewhere); rebuild from scratch.
+        $epochs = [];
+        $volsum = [0];
+        $cached_n = 0;
+    }
+    if ($cached_n < $n) {
+        for my $i ($cached_n .. $n - 1) {
+            my $c = $arr->[$i];
+            my $tm = eval { defined($c) ? Time::Moment->from_string($c->[0]) : undef };
+            my $ep = $tm ? $tm->epoch : undef;
+            push @$epochs, $ep;
+            my $prev = $volsum->[-1];
+            # Match old behaviour: candles with unparseable timestamps are excluded from any range
+            # (the old loop did `next unless $tm`), so they contribute 0 to the prefix-sum.
+            my $vol  = (defined $ep && $c && defined $c->[5]) ? $c->[5] : 0;
+            push @$volsum, $prev + $vol;
+        }
+        $self->{_epoch_cache}->{$tf}      = $epochs;
+        $self->{_volsum_cache}->{$tf}     = $volsum;
+        $self->{_epoch_cache_size}->{$tf} = $n;
+    }
+
+    # Binary search the inclusive lower bound: first index i where epoch[i] >= ts_start_epoch.
+    # Candles with undefined epoch (unparseable) are treated as "before" any finite target; this matches
+    # the old behaviour (next unless $tm) which skipped them.
+    my ($lo, $hi_range) = (0, $n);
+    while ($lo < $hi_range) {
+        my $mid = ($lo + $hi_range) >> 1;
+        my $em = $epochs->[$mid];
+        if (defined $em && $em < $ts_start_epoch) {
+            $lo = $mid + 1;
+        } else {
+            $hi_range = $mid;
         }
     }
-    return $total;
+    my $start_idx = $lo;
+
+    # Binary search the exclusive upper bound: first index i where epoch[i] >= ts_end_next_epoch.
+    ($lo, $hi_range) = (0, $n);
+    while ($lo < $hi_range) {
+        my $mid = ($lo + $hi_range) >> 1;
+        my $em = $epochs->[$mid];
+        if (defined $em && $em < $ts_end_next_epoch) {
+            $lo = $mid + 1;
+        } else {
+            $hi_range = $mid;
+        }
+    }
+    my $end_idx = $lo;  # exclusive
+
+    if ($start_idx >= $end_idx) {
+        return 0;  # empty range
+    }
+    # volsum[i] = sum(vol[0..i-1]); sum(vol[start_idx .. end_idx-1]) = volsum[end_idx] - volsum[start_idx].
+    return $volsum->[$end_idx] - $volsum->[$start_idx];
 }
 
 # =============================================================================
@@ -513,17 +631,30 @@ sub _detect_zones {
     }
 
     # Zone 2: swing highs/lows (BSL/SSL levels)
-    for my $lvl (@{ $self->{_levels} }) {
-        next unless $lvl->{type} eq 'BSL' || $lvl->{type} eq 'SSL';
-        my $sig = "zone_2:$lvl->{index}:$lvl->{price}";
-        if (!$seen->{$sig}) {
-            $seen->{$sig} = 1;
-            push @new_zones, {
-                index => $lvl->{index},
-                type  => 'zone_2',
-                price => $lvl->{price},
-                meta  => { internal => $internal, source => $lvl->{type} },
-            };
+    # PERF (task 0016): scan only levels appended since the last invocation (_zone2_cursor).
+    # Each level is protected by _zone_seen, so processing a level once is equivalent to
+    # processing it every call — the zone output is byte-identical, but this makes the cost
+    # O(new_levels) instead of O(total_levels) per candle (was the dominant O(N²) cost).
+    {
+        my $levels = $self->{_levels};
+        my $cursor = $self->{_zone2_cursor} // 0;
+        my $n = scalar(@$levels);
+        if ($cursor < $n) {
+            for my $li ($cursor .. $n - 1) {
+                my $lvl = $levels->[$li];
+                next unless $lvl->{type} eq 'BSL' || $lvl->{type} eq 'SSL';
+                my $sig = "zone_2:$lvl->{index}:$lvl->{price}";
+                if (!$seen->{$sig}) {
+                    $seen->{$sig} = 1;
+                    push @new_zones, {
+                        index => $lvl->{index},
+                        type  => 'zone_2',
+                        price => $lvl->{price},
+                        meta  => { internal => $internal, source => $lvl->{type} },
+                    };
+                }
+            }
+            $self->{_zone2_cursor} = $n;
         }
     }
 
@@ -748,6 +879,7 @@ sub reset {
     $self->{_last_close} = undef;
     $self->{_last_atr}   = undef;
     $self->{_atr_count}  = 0;
+    $self->{_last_defined_atr_idx} = undef;
     $self->{_levels}     = [];
     $self->{_eqh_pairs}  = {};
     $self->{_eql_pairs}  = {};
@@ -762,6 +894,11 @@ sub reset {
     $self->{_zones}       = [];
     $self->{_active_tf}   = '1m';
     $self->{_zone_seen}   = {};
+    $self->{_zone2_cursor} = 0;
+    # task 0016 (perf): invalidate per-TF epoch/volsum caches so they rebuild from fresh data.
+    $self->{_epoch_cache}      = {};
+    $self->{_volsum_cache}     = {};
+    $self->{_epoch_cache_size} = {};
     return;
 }
 

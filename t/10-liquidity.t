@@ -6,6 +6,7 @@ use lib '.';
 use Market::MarketData;
 use Market::Indicators::Liquidity;
 use Market::Debug::IndicatorSnapshot;
+use Time::HiRes qw(time);
 
 my $D = 'Market::Debug::IndicatorSnapshot';
 
@@ -834,6 +835,74 @@ sub build_ohlc_vol {
     $liq->update_last($md, $_) for 0 .. $md->last_index;
     my $events_batch = $liq->get_events();
     is(scalar(@$events), scalar(@$events_batch), 'TASK 0013: equiv incremental == batch');
+}
+
+# =============================================================================
+# TASK 0016: Performance — feeding a large dataset must NOT hang the indicator.
+# =============================================================================
+# The app freezes on the real CSV (29888 candles) because _sum_volume_for_tf
+# (called once per resolved event per TF) scanned the whole TF array parsing
+# Time::Moment per candle → ~16ms/candle → ~6-7 min of freeze.
+#
+# This test feeds >= 5000 candles with a pattern that forces many resolved
+# events (so _sum_volume_for_tf and the FSM/zones loops are exercised thousands
+# of times) and asserts the full incremental feed completes well under a generous
+# budget.
+#
+# Measured separation (WSL Fedora35):
+#   OLD (pre-0016) code: ~30-33s for 5000 candles  → FAILS this threshold by 3x
+#   NEW (0016)     code: ~3-5s   for 5000 candles  → PASSES with comfortable margin
+# The 10s budget is deliberately loose: it catches the O(n²) regression decisively
+# while staying immune to host load / GC jitter (a strict 5s budget was flaky in CI).
+{
+    # Build >=5000 candles with a repeating "swing + sweep + reject" motif so
+    # the FSM resolves a GRAB/SWEEP roughly every ~10 candles. Each resolution
+    # triggers _compute_event_meta → _sum_volume_for_tf over the 5m/15m arrays,
+    # and the per-candle _detect_zones / _update_fsm loops get exercised at scale.
+    my $N = 5000;
+    my @c;
+    my $base = 100;
+    my $ts0 = '2026-04-06T00:00:00-05:00';
+    my $t0  = Time::Moment->from_string($ts0);
+    for my $i (0 .. $N - 1) {
+        # Deterministic 1-minute timestamps.
+        my $tm = $t0->plus_minutes($i);
+        my $ts = $tm->to_string;
+        # Repeating 10-bar motif:
+        #   bar 0: SH (high spike) → registered as BSL when next SH confirms
+        #   bars 1..3: flat
+        #   bar 4: SSL (low dip)
+        #   bars 5..7: flat
+        #   bar 8: sweep up + immediate rejection (close below BSL) → GRAB
+        #   bar 9: flat
+        my $phase = $i % 10;
+        my ($o, $h, $l, $c, $v) = ($base, $base, $base, $base, 1 + ($i % 50));
+        if    ($phase == 0) { $h = $base + 5; $c = $base; }
+        elsif ($phase == 4) { $l = $base - 5; $c = $base; }
+        elsif ($phase == 8) { $h = $base + 6; $l = $base - 1; $c = $base - 1; }
+        push @c, [$ts, $o, $h, $l, $c, $v];
+    }
+
+    my $md = Market::MarketData->new();
+    $md->add_candle($_) for @c;
+    $md->build_tf_candles('5m');
+    $md->build_tf_candles('15m');
+
+    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 3, N => 3);
+
+    my $t_start = time();
+    $liq->update_last($md, $_) for 0 .. $md->last_index;
+    my $elapsed = time() - $t_start;
+
+    my $events = $liq->get_events();
+    ok(scalar(@$events) > 0, 'TASK 0016: la alimentacion produce eventos (FSM activa)');
+    cmp_ok(scalar(@c), '>=', 5000, 'TASK 0016: dataset >= 5000 velas');
+    cmp_ok($elapsed, '<', 10, "TASK 0016: alimentar 5000+ velas < 10s (medido: ${\sprintf('%.3f', $elapsed)}s; old code ~30s)");
+
+    # Invariante: todos los eventos resueltos tienen meta multi-TF (ejercita la suma por rango).
+    my $last_ev = $events->[-1];
+    ok(defined $last_ev->{meta} && defined $last_ev->{meta}->{v1m},
+       'TASK 0016: el último evento lleva meta multi-TF (v1m)');
 }
 
 done_testing();

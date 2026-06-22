@@ -4,18 +4,24 @@ Clasificada por severidad. No se resuelve aquí; solo se documenta. Última act.
 
 ## Crítico
 
-### La app se cuelga al abrir con el dataset real (29888 velas) — task 0016 abierta
-- **Descripción:** el primer `render()` alimenta Liquidity sobre las 29888 velas;
-  `_sum_volume_for_tf` (task 0013) recorre el array completo del TF parseando `Time::Moment` por
-  vela, por cada evento resuelto y cada TF → ~16 ms/vela → ~6-7 min de cuelgue síncrono. La ventana
-  abre pero el gráfico queda en blanco. Secundario: `_active_levels` no poda los `Resolved` (O(n²)).
-- **Perfilado:** `_sum_volume_for_tf` = 96% del tiempo (1086 llamadas en 2000 velas, 37s).
-- **Impacto:** BLOQUEA la ejecución de la 1ª entrega. Los 654 tests pasan porque usan 10-35 velas.
-- **Evidencia:** medición del arquitecto (perf_probe/prof_vol); log de la app para en
-  "Render geometry ... bars=60".
-- **Recomendación:** task `0016-liquidity-performance-fix.md` (cache de epochs + prefix-sum +
-  búsqueda binaria; podar niveles Resolved). Resolver ANTES de cualquier validación visual.
-- **¿Bloquea?:** sí, totalmente. Máxima prioridad.
+### SMC_Structures se cuelga ~37s en el dataset real — task 0017 abierta
+- **Descripción:** mismo patrón O(n²) que Liquidity (0016): `_detect_and_mitigate_fvgs` es el 84%
+  del tiempo; el array `_fvgs` crece sin límite (1621 FVGs a 8000 velas) y el loop de mitigación
+  recorre TODOS los FVGs en cada vela, incluidos los inactivos que nunca se podan.
+- **Perfilado (arquitecto):** SMC feed 29888 velas = 37.6s; `_detect_and_mitigate_fvgs` 84%.
+  Arranque total app = ~48s (SMC 37.6 + Liquidity 10.3). La app abre pero congelada ~48s.
+- **Impacto:** BLOQUEA la 1ª entrega igual que 0016 (el usuario ve ventana en blanco ~48s).
+- **Recomendación:** task `0017-smc-performance-fix.md` (podar FVGs inactivos; índice por vela
+  para mitigación). Mismo patrón ya resuelto en 0016.
+- **¿Bloquea?:** sí. Resolver antes de validación visual.
+
+### [RESUELTO 2026-06-21] La app se colgaba al abrir con el dataset real — Liquidity, task 0016
+- **Era:** `_sum_volume_for_tf` recorría el array completo del TF parseando `Time::Moment` por vela
+  (96% del tiempo) → ~16 ms/vela → cuelgue. `_active_levels` no podaba Resolved.
+- **Fix:** cache de epochs + prefix-sum de volumen + búsqueda binaria (O(log n)); poda de niveles
+  Resolved; `_detect_zones` con cursor incremental; `_get_atr_at` O(1). Liquidity feed 29888 velas:
+  272s → 5.8s (**~47x**). Resultados idénticos (Case 26 intacto). Test de cota en `t/10`. 658 PASS.
+- **¿Bloquea?:** ya no (Liquidity). Falta SMC (task 0017).
 
 ### [RESUELTO 2026-06-21] Indicadores se alimentaban hasta el fin del dataset en Replay — task 0015
 - **Era:** `ChartEngine::render` alimentaba SMC/Liquidity hasta `size()-1` aunque Replay estuviera
