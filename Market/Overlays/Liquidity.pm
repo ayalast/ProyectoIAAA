@@ -116,7 +116,9 @@ sub compute_visible {
 
     my $ind = defined $indicator ? $indicator : $self->{indicator};
 
-    my $levels = $ind->can('get_levels') ? $ind->get_levels() : [];
+    my $levels = $ind->can('get_active_levels') ? $ind->get_active_levels()
+               : $ind->can('get_levels')        ? $ind->get_levels()
+               : [];
     my $events = $ind->can('get_events') ? $ind->get_events() : [];
     # spec 0018c: tope de recencia (como TradingView SMC). En vistas amplias el
     # rango visible tiene cientos de niveles; mostrarlos todos apila bandas BSL/SSL
@@ -265,7 +267,7 @@ sub _draw_pair_line {
     my $label_color = $self->_color($type eq 'EQH' ? 'liq_eqh_label' : 'liq_eql_label',
                                     $color);
 
-    # Polilínea entre pivotes consecutivos del par.
+    # Línea horizontal punteada entre pivotes consecutivos del par.
     for my $i (0 .. $#sorted - 1) {
         my $a = $sorted[$i];
         my $b = $sorted[$i + 1];
@@ -273,23 +275,26 @@ sub _draw_pair_line {
         my $x1 = $scales->index_to_center_x($self->_local_index($a->{index}));
         my $y1 = $scales->value_to_y($a->{price});
         my $x2 = $scales->index_to_center_x($self->_local_index($b->{index}));
-        my $y2 = $scales->value_to_y($b->{price});
         $canvas->createLine(
-            $x1, $y1, $x2, $y2,
+            $x1, $y1, $x2, $y1,
             -fill  => $color,
+            -dash  => [2, 3],
             -width => 2,
             -tags  => $tag,
         );
     }
-    # Etiqueta sobre el último pivote del par.
-    my $last = $sorted[-1];
-    if (defined $last->{price}) {
-        my $x = $scales->index_to_center_x($self->_local_index($last->{index}));
-        my $y = $scales->value_to_y($last->{price});
+    # Etiqueta sobre el punto medio de los extremos del par.
+    my $first = $sorted[0];
+    my $last  = $sorted[-1];
+    if (defined $first->{price} && defined $last->{price}) {
+        my $x1 = $scales->index_to_center_x($self->_local_index($first->{index}));
+        my $x2 = $scales->index_to_center_x($self->_local_index($last->{index}));
+        my $x_mid = ($x1 + $x2) / 2;
+        my $y = $scales->value_to_y($first->{price});
         $canvas->createText(
-            $x, $y,
+            $x_mid, $type eq 'EQH' ? $y - 6 : $y + 6,
             -text   => $type,
-            -anchor => 'n',
+            -anchor => $type eq 'EQH' ? 's' : 'n',
             -font   => 'Helvetica 8 bold',
             -fill   => $label_color,
             -tags   => $tag,

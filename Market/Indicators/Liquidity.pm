@@ -32,7 +32,7 @@ sub new {
     my ($class, %opts) = @_;
     my $k         = $opts{k}         // 3;
     my $atr_period= $opts{atr_period}// 14;
-    my $tol_factor= $opts{tol_factor}// 0.10;
+    my $tol_factor= $opts{tol_factor}// 0.25;
     my $N         = $opts{N}         // 3;
     die "Liquidity: k must be a positive integer"
         unless defined $k && $k =~ /^\d+$/ && $k > 0;
@@ -849,6 +849,9 @@ sub get_zones {
 sub get_active_levels {
     my ($self) = @_;
     my @result;
+    my %active_indices;
+
+    # 1. BSL/SSL activos de _active_levels
     for my $lvl (@{ $self->{_active_levels} }) {
         next if $lvl->{state} eq 'Resolved';
         push @result, {
@@ -857,7 +860,73 @@ sub get_active_levels {
             price => $lvl->{price},
             state => $lvl->{state},
         };
+        $active_indices{$lvl->{side}}{$lvl->{index}} = 1;
     }
+
+    # 2. El último SH/SL (aún no en _active_levels pero activos)
+    if (defined $self->{_last_sh}) {
+        push @result, {
+            index => $self->{_last_sh}->{index},
+            type  => 'BSL',
+            price => $self->{_last_sh}->{price},
+            state => 'Detected',
+        };
+        $active_indices{BSL}{$self->{_last_sh}->{index}} = 1;
+    }
+    if (defined $self->{_last_sl}) {
+        push @result, {
+            index => $self->{_last_sl}->{index},
+            type  => 'SSL',
+            price => $self->{_last_sl}->{price},
+            state => 'Detected',
+        };
+        $active_indices{SSL}{$self->{_last_sl}->{index}} = 1;
+    }
+
+    # 3. Agrupar EQH/EQL de _levels por tipo y precio para comprobar co-actividad
+    my %eq_groups;
+    for my $lvl (@{ $self->{_levels} }) {
+        next unless $lvl->{type} eq 'EQH' || $lvl->{type} eq 'EQL';
+        push @{ $eq_groups{$lvl->{type}}{$lvl->{price}} }, $lvl->{index};
+    }
+
+    # 4. Retornar EQH/EQL si todos sus componentes del grupo siguen activos
+    for my $lvl (@{ $self->{_levels} }) {
+        if ($lvl->{type} eq 'EQH') {
+            my $grp = $eq_groups{EQH}{$lvl->{price}};
+            my $all_active = 1;
+            if (defined $grp) {
+                for my $idx (@$grp) {
+                    if (!$active_indices{BSL}{$idx}) {
+                        $all_active = 0;
+                        last;
+                    }
+                }
+            } else {
+                $all_active = $active_indices{BSL}{$lvl->{index}};
+            }
+            if ($all_active) {
+                push @result, $lvl;
+            }
+        } elsif ($lvl->{type} eq 'EQL') {
+            my $grp = $eq_groups{EQL}{$lvl->{price}};
+            my $all_active = 1;
+            if (defined $grp) {
+                for my $idx (@$grp) {
+                    if (!$active_indices{SSL}{$idx}) {
+                        $all_active = 0;
+                        last;
+                    }
+                }
+            } else {
+                $all_active = $active_indices{SSL}{$lvl->{index}};
+            }
+            if ($all_active) {
+                push @result, $lvl;
+            }
+        }
+    }
+
     return \@result;
 }
 

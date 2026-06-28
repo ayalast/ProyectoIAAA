@@ -905,4 +905,36 @@ sub build_ohlc_vol {
        'TASK 0016: el último evento lleva meta multi-TF (v1m)');
 }
 
+# =============================================================================
+# TASK 0022 (Regresiones): get_active_levels EQH/EQL filtering
+# =============================================================================
+{
+    # Si tenemos un par EQH, y luego uno de ellos es barrido/resuelto,
+    # get_active_levels() debe omitir ese EQH del par barrido porque ya no está activo.
+    my @c = (
+        [10, 11, 10, 11],   # 0
+        [11, 15, 11, 15],   # 1: SH (HH=15) -> genera BSL@1 (price=15)
+        [13, 12, 12, 12],   # 2
+        [12, 15, 12, 15],   # 3: SH (HH=15) -> genera EQH@1 y EQH@3 (price=15)
+        [14, 14, 13, 14],   # 4
+        [14, 17, 14, 16],   # 5: close=16 > 15 -> Swept.
+        [16, 17, 16, 17],   # 6
+        [17, 18, 17, 18],   # 7
+    );
+    my $md  = build_ohlc(\@c);
+    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 3, N => 3);
+    
+    # Alimentamos hasta index 4 (antes de romper el nivel): EQH debe estar activo.
+    $liq->update_last($md, $_) for 0 .. 4;
+    my $active_before = $liq->get_active_levels();
+    my @eqh_before = grep { $_->{type} eq 'EQH' } @$active_before;
+    is(scalar(@eqh_before), 2, 'active levels: EQH activo antes de ser barrido (2 items)');
+
+    # Alimentamos todo (se barre y resuelve la liquidez en index 5): EQH debe desaparecer de activos.
+    $liq->update_last($md, $_) for 5 .. $md->last_index;
+    my $active_after = $liq->get_active_levels();
+    my @eqh_after = grep { $_->{type} eq 'EQH' } @$active_after;
+    is(scalar(@eqh_after), 0, 'active levels: EQH inactivo/barrido después de la ruptura (0 items)');
+}
+
 done_testing();
