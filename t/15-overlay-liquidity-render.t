@@ -405,4 +405,38 @@ sub _line_signature {
     return join(',', $op->[1], $op->[2], $op->[3], $op->[4]);
 }
 
+# =============================================================================
+# Test 9: dibujo de marcadores de evento (BSL vs SSL) dirigidos hacia afuera
+# =============================================================================
+{
+    my $ind = TestIndicator->new(
+        events => [
+            { index => 2, type => 'GRAB', dir => 'up',   price => 15, extreme => 18 }, # BSL
+            { index => 4, type => 'RUN',  dir => 'down', price => 10, extreme => 8  }, # SSL
+        ]
+    );
+    my $ov     = Market::Overlays::Liquidity->new(indicator => $ind, theme => {});
+    my $canvas = TestCanvas->new();
+    my $scales = make_scales(5, 25, 10); # ventana [0, 9]
+
+    $ov->compute_visible(undef, $ind, 0, 9);
+    $canvas->{ops} = [];
+    $ov->draw($canvas, $scales);
+
+    my @lines = grep { $_->[0] eq 'createLine' } @{ $canvas->{ops} };
+    is(scalar(@lines), 2, 'Liquidity markers: crea dos lineas de marcador');
+
+    # BSL GRAB (index 2, extreme 18):
+    # extreme=18 -> y = value_to_y(18) = 210.
+    # dir=up -> va hacia arriba (y - 20) -> Y1=210, Y2=190.
+    my @up_lines = grep { $_->[2] == 210 && $_->[4] == 190 } @lines;
+    is(scalar(@up_lines), 1, 'Liquidity BSL grab: la linea va hacia arriba desde el High (210 -> 190)');
+
+    # SSL RUN (index 4, extreme 8):
+    # extreme=8 -> y = value_to_y(8) = 510.
+    # dir=down -> va hacia abajo (y + 20) -> Y1=510, Y2=530.
+    my @down_lines = grep { $_->[2] == 510 && $_->[4] == 530 } @lines;
+    is(scalar(@down_lines), 1, 'Liquidity SSL run: la linea va hacia abajo desde el Low (510 -> 530)');
+}
+
 done_testing();

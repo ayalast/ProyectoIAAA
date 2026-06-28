@@ -416,13 +416,17 @@ sub _resolve {
     $lvl->{state} = 'Resolved';
     my $dir = $lvl->{swept_dir} // 'up';
     my $meta = $self->_compute_event_meta($lvl, $index);
+    my $c_high = $self->{_highs}->[$index] // $lvl->{price};
+    my $c_low  = $self->{_lows}->[$index] // $lvl->{price};
+    my $extreme = $dir eq 'up' ? $c_high : $c_low;
     push @{ $self->{_events} }, {
-        index => $index,
-        type  => $classification,
-        dir   => $dir,
-        price => $lvl->{price},
-        state => 'Resolved',
-        meta  => $meta,
+        index   => $index,
+        type    => $classification,
+        dir     => $dir,
+        price   => $lvl->{price},
+        extreme => $extreme,
+        state   => 'Resolved',
+        meta    => $meta,
     };
     return;
 }

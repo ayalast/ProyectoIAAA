@@ -304,22 +304,44 @@ sub _draw_pair_line {
 sub _draw_event_marker {
     my ($self, $canvas, $scales, $tag, $e, $label, $color) = @_;
     my $x = $scales->index_to_center_x($self->_local_index($e->{index}));
-    my $y = defined $e->{price} ? $scales->value_to_y($e->{price}) : 0;
-    # Línea vertical corta (marcador de quiebre) de ~24px centrada en el nivel.
-    $canvas->createLine(
-        $x, $y - 12, $x, $y + 12,
-        -fill  => $color,
-        -width => 2,
-        -tags  => $tag,
-    );
-    $canvas->createText(
-        $x, $y - 16,
-        -text   => $label,
-        -anchor => 's',
-        -font   => 'Helvetica 8 bold',
-        -fill   => $color,
-        -tags   => $tag,
-    );
+    
+    my $price = $e->{extreme} // $e->{price};
+    my $y = defined $price ? $scales->value_to_y($price) : 0;
+    my $dir = $e->{dir} // 'up';
+
+    if ($dir eq 'up') {
+        # BSL: Línea vertical que va hacia arriba desde el High de la vela.
+        $canvas->createLine(
+            $x, $y, $x, $y - 20,
+            -fill  => $color,
+            -width => 2,
+            -tags  => $tag,
+        );
+        $canvas->createText(
+            $x, $y - 24,
+            -text   => $label,
+            -anchor => 's',
+            -font   => 'Helvetica 8 bold',
+            -fill   => $color,
+            -tags   => $tag,
+        );
+    } else {
+        # SSL: Línea vertical que va hacia abajo desde el Low de la vela.
+        $canvas->createLine(
+            $x, $y, $x, $y + 20,
+            -fill  => $color,
+            -width => 2,
+            -tags  => $tag,
+        );
+        $canvas->createText(
+            $x, $y + 24,
+            -text   => $label,
+            -anchor => 'n',
+            -font   => 'Helvetica 8 bold',
+            -fill   => $color,
+            -tags   => $tag,
+        );
+    }
     return;
 }
 
