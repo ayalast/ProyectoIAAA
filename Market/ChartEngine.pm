@@ -12,6 +12,12 @@ use Market::Indicators::SMC_Structures;
 use Market::Overlays::SMC_Structures;
 use Market::Indicators::Liquidity;
 use Market::Overlays::Liquidity;
+use Market::Indicators::Strategy_Builder;
+use Market::Overlays::Strategy_Builder;
+use Market::Indicators::VolumeProfile;
+use Market::Overlays::VolumeProfile;
+use Market::Indicators::AnchoredVWAP;
+use Market::Overlays::AnchoredVWAP;
 
 # Constantes del módulo (valores fijos del paquete, no estado global mutable).
 #   RIGHT_MARGIN     => margen interno derecho del área de ploteo. Los ejes ahora
@@ -135,6 +141,33 @@ sub new {
     $self->{overlay_manager}->register('liq', $self->{liq_overlay});
     $self->{_liq_fed_up_to} = -1;
 
+    $self->{strategy_indicator} = Market::Indicators::Strategy_Builder->new();
+    $self->{strategy_overlay}   = Market::Overlays::Strategy_Builder->new(
+        indicator => $self->{strategy_indicator},
+        theme     => $self->{theme},
+        visible   => 0,
+    );
+    $self->{overlay_manager}->register('strategy', $self->{strategy_overlay});
+    $self->{_strategy_fed_up_to} = -1;
+
+    $self->{vp_indicator} = Market::Indicators::VolumeProfile->new();
+    $self->{vp_overlay}   = Market::Overlays::VolumeProfile->new(
+        indicator => $self->{vp_indicator},
+        theme     => $self->{theme},
+        visible   => 0,
+    );
+    $self->{overlay_manager}->register('vp', $self->{vp_overlay});
+    $self->{_vp_fed_up_to} = -1;
+
+    $self->{vwap_indicator} = Market::Indicators::AnchoredVWAP->new();
+    $self->{vwap_overlay}   = Market::Overlays::AnchoredVWAP->new(
+        indicator => $self->{vwap_indicator},
+        theme     => $self->{theme},
+        visible   => 0,
+    );
+    $self->{overlay_manager}->register('vwap', $self->{vwap_overlay});
+    $self->{_vwap_fed_up_to} = -1;
+
     $self->bind_events();
     
     return $self;
@@ -218,6 +251,12 @@ sub sync_overlay_indicators {
         if $self->_overlay_wants_feed('smc');
     $self->_feed_indicator_to($self->{liq_indicator}, '_liq_fed_up_to', $feed_to)
         if $self->_overlay_wants_feed('liq');
+    $self->_feed_indicator_to($self->{strategy_indicator}, '_strategy_fed_up_to', $feed_to)
+        if $self->_overlay_wants_feed('strategy');
+    $self->_feed_indicator_to($self->{vp_indicator}, '_vp_fed_up_to', $feed_to)
+        if $self->_overlay_wants_feed('vp');
+    $self->_feed_indicator_to($self->{vwap_indicator}, '_vwap_fed_up_to', $feed_to)
+        if $self->_overlay_wants_feed('vwap');
     return $feed_to;
 }
 
@@ -1799,6 +1838,18 @@ sub set_timeframe {
     if ($self->{liq_indicator}) {
         $self->{liq_indicator}->reset();
         $self->{_liq_fed_up_to} = -1;
+    }
+    if ($self->{strategy_indicator}) {
+        $self->{strategy_indicator}->reset();
+        $self->{_strategy_fed_up_to} = -1;
+    }
+    if ($self->{vp_indicator}) {
+        $self->{vp_indicator}->reset();
+        $self->{_vp_fed_up_to} = -1;
+    }
+    if ($self->{vwap_indicator}) {
+        $self->{vwap_indicator}->reset();
+        $self->{_vwap_fed_up_to} = -1;
     }
     $self->{is_auto_scale} = 1;
     $self->{manual_min_y} = undef;
