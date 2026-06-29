@@ -241,7 +241,7 @@ sub draw {
             $label = 'CHoCH';
             $color = $self->{theme}{smc_choch_true} // $dir_color;
         } else {
-            $label = 'ICHoCH';
+            $label = 'CHoCH';
             $color = $self->{theme}{smc_choch_false} // $dir_color;
         }
 

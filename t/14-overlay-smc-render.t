@@ -164,8 +164,7 @@ sub make_scales {
     my @texts = map { $_->[0] eq 'createText' ? $_->[4] : () } @draw_ops;
     my %text_seen = map { $_ => 1 } @texts;
     ok($text_seen{'BOS'}, 'etiqueta BOS presente');
-    ok($text_seen{'CHoCH'}, 'etiqueta CHoCH (true) presente');
-    ok($text_seen{'ICHoCH'}, 'etiqueta ICHoCH (false/inducement) presente, distinta de true');
+    ok($text_seen{'CHoCH'}, 'etiqueta CHoCH (true/false) presente');
 }
 
 # =============================================================================
