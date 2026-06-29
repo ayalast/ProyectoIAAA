@@ -105,16 +105,22 @@ sub draw {
     my $end   = $self->{_end}   // 0;
     my $w     = $scales->{width} || $scales->plot_width();
 
+    # Borde derecho de las cajas/lineas: la ULTIMA vela visible (index $end),
+    # no el borde del canvas. Replica TradingView, que corta los dibujos al
+    # final de la ultima vela en vez de extenderlos al espacio vacio derecho.
+    my $x_right = $scales->index_to_center_x($self->_local_index($end));
+    $x_right = $w if $x_right > $w;
+
     my $bull = $self->_color('mxwll_bull', '#14D990');
     my $bear = $self->_color('mxwll_bear', '#F24968');
 
     # --- 1. Order blocks (cajas) ---
     if ($self->is_element_visible('OB')) {
         for my $z (@{ $vals->{high_blocks} // [] }) {
-            $self->_draw_block($canvas, $scales, $tag, $w, $z, $bear);
+            $self->_draw_block($canvas, $scales, $tag, $x_right, $z, $bear);
         }
         for my $z (@{ $vals->{low_blocks} // [] }) {
-            $self->_draw_block($canvas, $scales, $tag, $w, $z, '#2157f3');
+            $self->_draw_block($canvas, $scales, $tag, $x_right, $z, '#2157f3');
         }
     }
 
@@ -124,8 +130,8 @@ sub draw {
         for my $g (@{ $vals->{fvgs} // [] }) {
             next if $g->{index} > $end;
             my $x0 = $scales->index_to_x($self->_local_index($g->{index}));
-            next if $x0 > $w;
-            my $x1 = $w;
+            next if $x0 > $x_right;
+            my $x1 = $x_right;
             my $yt = $scales->value_to_y($g->{top});
             my $yb = $scales->value_to_y($g->{bottom});
             $canvas->createRectangle(
@@ -143,7 +149,7 @@ sub draw {
         my $a = $vals->{aoe};
         my $x0 = $scales->index_to_x($self->_local_index($a->{from_index}));
         $x0 = 0 if $x0 < 0;
-        my $x1 = $w;
+        my $x1 = $x_right;
         # zona alta (resistencia)
         $canvas->createRectangle(
             $x0, $scales->value_to_y($a->{high_top}), $x1, $scales->value_to_y($a->{high_bottom}),
@@ -180,9 +186,9 @@ sub draw {
         for my $lv (@{ $f->{levels} }) {
             my $y  = $scales->value_to_y($lv->{price});
             my $col = $FIB_COLORS[$i % scalar(@FIB_COLORS)];
-            $canvas->createLine($fx2, $y, $w, $y,
+            $canvas->createLine($fx2, $y, $x_right, $y,
                 -fill => $col, -width => 1, -tags => $tag);
-            $canvas->createText($w - 2, $y - 5,
+            $canvas->createText($x_right - 2, $y - 5,
                 -text => sprintf('%.3f', $lv->{ratio}), -anchor => 'e',
                 -font => 'Helvetica 7', -fill => $col, -tags => $tag);
             $i++;
@@ -230,10 +236,10 @@ sub draw {
 }
 
 sub _draw_block {
-    my ($self, $canvas, $scales, $tag, $w, $z, $color) = @_;
+    my ($self, $canvas, $scales, $tag, $right, $z, $color) = @_;
     return if $z->{index} > $self->{_end};
     my $x0 = $scales->index_to_x($self->_local_index($z->{index}));
-    my $x1 = $w;
+    my $x1 = $right;
     return if $x1 < 0;
     $x0 = 0 if $x0 < 0;
     my $yt = $scales->value_to_y($z->{top});
