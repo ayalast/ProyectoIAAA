@@ -5,23 +5,22 @@ use warnings;
 # =============================================================================
 # Market::Indicators::AnchoredVWAP
 # 
-# Multipivot Anchored VWAP engine generating smooth continuous series
+# Multipivot Anchored VWAP engine generating smooth continuous series near price candles
 # =============================================================================
 
 sub new {
     my ($class, %opts) = @_;
     my $anchor_type = $opts{anchor_type} // 'session';
+    my $window_size = $opts{window_size} // 40;
 
     my $self = {
         anchor_type => $anchor_type,
+        window_size => $window_size,
         _highs      => [],
         _lows       => [],
         _closes     => [],
         _volumes    => [],
         _vwap       => [], # array of { value => num, anchor_idx => idx }
-        _cum_pv     => 0,
-        _cum_vol    => 0,
-        _anchor_idx => 0,
         _market_data=> undef,
     };
     bless $self, $class;
@@ -35,9 +34,6 @@ sub reset {
     $self->{_closes}     = [];
     $self->{_volumes}    = [];
     $self->{_vwap}       = [];
-    $self->{_cum_pv}     = 0;
-    $self->{_cum_vol}    = 0;
-    $self->{_anchor_idx} = 0;
     return;
 }
 
@@ -57,11 +53,24 @@ sub update_last {
     $self->{_closes}->[$index]  = $close;
     $self->{_volumes}->[$index] = $vol;
 
-    my $tp = ($high + $low + $close) / 3;
-    $self->{_cum_pv}  += ($tp * $vol);
-    $self->{_cum_vol} += $vol;
+    # Compute rolling volume-weighted price over rolling window to ensure VWAP is always near candles & unbroken
+    my $win = $self->{window_size};
+    my $start_k = ($index >= $win) ? ($index - $win + 1) : 0;
 
-    my $vwap_val = ($self->{_cum_vol} > 0) ? ($self->{_cum_pv} / $self->{_cum_vol}) : $close;
+    my $sum_pv  = 0;
+    my $sum_vol = 0;
+    for my $k ($start_k .. $index) {
+        my $h = $self->{_highs}->[$k];
+        my $l = $self->{_lows}->[$k];
+        my $c = $self->{_closes}->[$k];
+        my $v = $self->{_volumes}->[$k] // 1;
+        next unless defined $h && defined $l && defined $c;
+        my $tp = ($h + $l + $c) / 3;
+        $sum_pv  += ($tp * $v);
+        $sum_vol += $v;
+    }
+
+    my $vwap_val = ($sum_vol > 0) ? ($sum_pv / $sum_vol) : $close;
     $self->{_vwap}->[$index] = {
         value      => $vwap_val,
         anchor_idx => 0,
