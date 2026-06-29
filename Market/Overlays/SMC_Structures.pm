@@ -91,10 +91,9 @@ sub compute_visible {
 
     my $ind = defined $indicator ? $indicator : $self->{indicator};
 
-    # Pivotes y eventos son etiquetas locales o líneas acotadas, así que window_filter es correcto.
-    # Aumentamos los topes de recencia para que no desaparezcan al alejar el zoom.
-    $self->{_pivots} = _recent(_window_filter($ind->get_pivots(),   $start, $end), 40);
-    $self->{_events} = _recent(_window_filter($ind->get_events(),   $start, $end), 30);
+    # Pivotes y eventos son etiquetas locales o líneas acotadas.
+    $self->{_pivots} = _recent(_window_filter($ind->get_pivots(), $start, $end), 40);
+    $self->{_events} = _recent(_events_window_filter($ind->get_events(), $start, $end), 40);
     
     # FVG, Fib y Major son líneas horizontales o cajas que se extienden al infinito o hasta mitigación,
     # por lo que deben mostrarse si empezaron en cualquier índice <= $end (aunque start_index esté off-screen).
@@ -112,6 +111,21 @@ sub _recent {
     my @sorted = sort { ($b->{index} // 0) <=> ($a->{index} // 0) } @$items;
     my @keep = @sorted[0 .. $n - 1];
     return [ sort { ($a->{index} // 0) <=> ($b->{index} // 0) } @keep ];
+}
+
+# Filtra eventos (BOS/CHoCH) comprobando solapamiento de su tramo [start_index, index] con [start, end].
+sub _events_window_filter {
+    my ($events, $start, $end) = @_;
+    return [] unless defined $events;
+    my @filtered;
+    for my $e (@$events) {
+        next unless defined $e->{index};
+        my $s_idx = $e->{start_index} // $e->{index};
+        next if $s_idx > $end;
+        next if $e->{index} < $start;
+        push @filtered, $e;
+    }
+    return \@filtered;
 }
 
 # Filtra items por index dentro de [start, end]. Un item sin index se descarta.

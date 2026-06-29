@@ -233,27 +233,15 @@ sub _process_swing_high {
     my ($self, $j) = @_;
     my $price = $self->{_highs}->[$j];
 
-    # BSL: liquidez por encima del swing high más reciente
     if (defined $self->{_last_sh}) {
-        my $lvl = {
-            index => $self->{_last_sh}->{index},
-            type  => 'BSL',
-            price => $self->{_last_sh}->{price},
-        };
-        push @{ $self->{_levels} }, $lvl;
-        $self->_register_level_ref($lvl);
-    }
-    $self->{_last_sh} = { index => $j, price => $price };
-
-    # EQH: comparar con el swing high previo
-    if (defined $self->{_last_sh_prev}) {
-        my $prev_price = $self->{_last_sh_prev}->{price};
+        my $prev_price = $self->{_last_sh}->{price};
+        my $prev_index = $self->{_last_sh}->{index};
         my $atr = $self->_get_atr_at($j) // 0;
         my $tol = $atr * $self->{tol_factor};
         if (abs($price - $prev_price) <= $tol) {
-            my $gid = "eqh_" . $self->{_last_sh_prev}->{index} . "_" . $j;
+            my $gid = "eqh_" . $prev_index . "_" . $j;
             push @{ $self->{_levels} }, {
-                index    => $self->{_last_sh_prev}->{index},
+                index    => $prev_index,
                 type     => 'EQH',
                 price    => $prev_price,
                 group_id => $gid,
@@ -265,8 +253,19 @@ sub _process_swing_high {
                 group_id => $gid,
             };
         }
+
+        # BSL: liquidez por encima del swing high previo
+        my $lvl = {
+            index => $prev_index,
+            type  => 'BSL',
+            price => $prev_price,
+        };
+        push @{ $self->{_levels} }, $lvl;
+        $self->_register_level_ref($lvl);
     }
+
     $self->{_last_sh_prev} = $self->{_last_sh};
+    $self->{_last_sh}      = { index => $j, price => $price };
     return;
 }
 
@@ -274,27 +273,15 @@ sub _process_swing_low {
     my ($self, $j) = @_;
     my $price = $self->{_lows}->[$j];
 
-    # SSL: liquidez por debajo del swing low más reciente
     if (defined $self->{_last_sl}) {
-        my $lvl = {
-            index => $self->{_last_sl}->{index},
-            type  => 'SSL',
-            price => $self->{_last_sl}->{price},
-        };
-        push @{ $self->{_levels} }, $lvl;
-        $self->_register_level_ref($lvl);
-    }
-    $self->{_last_sl} = { index => $j, price => $price };
-
-    # EQL: comparar con el swing low previo
-    if (defined $self->{_last_sl_prev}) {
-        my $prev_price = $self->{_last_sl_prev}->{price};
+        my $prev_price = $self->{_last_sl}->{price};
+        my $prev_index = $self->{_last_sl}->{index};
         my $atr = $self->_get_atr_at($j) // 0;
         my $tol = $atr * $self->{tol_factor};
         if (abs($price - $prev_price) <= $tol) {
-            my $gid = "eql_" . $self->{_last_sl_prev}->{index} . "_" . $j;
+            my $gid = "eql_" . $prev_index . "_" . $j;
             push @{ $self->{_levels} }, {
-                index    => $self->{_last_sl_prev}->{index},
+                index    => $prev_index,
                 type     => 'EQL',
                 price    => $prev_price,
                 group_id => $gid,
@@ -306,8 +293,19 @@ sub _process_swing_low {
                 group_id => $gid,
             };
         }
+
+        # SSL: liquidez por debajo del swing low previo
+        my $lvl = {
+            index => $prev_index,
+            type  => 'SSL',
+            price => $prev_price,
+        };
+        push @{ $self->{_levels} }, $lvl;
+        $self->_register_level_ref($lvl);
     }
+
     $self->{_last_sl_prev} = $self->{_last_sl};
+    $self->{_last_sl}      = { index => $j, price => $price };
     return;
 }
 
@@ -608,37 +606,18 @@ sub _detect_zones {
     my $seen = $self->{_zone_seen};
     my @new_zones;
 
-    # Zone 1: EQH/EQL levels — check last_sh_prev and last_sl_prev for equal pairs
-    if (defined $self->{_last_sh} && defined $self->{_last_sh_prev}) {
-        my $atr = $self->_get_atr_at($index) // 0;
-        my $tol = $atr * $self->{tol_factor};
-        if (abs($self->{_last_sh}->{price} - $self->{_last_sh_prev}->{price}) <= $tol) {
-            my $sig = "zone_1:$self->{_last_sh_prev}->{index}:$self->{_last_sh_prev}->{price}";
-            if (!$seen->{$sig}) {
-                $seen->{$sig} = 1;
-                push @new_zones, {
-                    index => $self->{_last_sh_prev}->{index},
-                    type  => 'zone_1',
-                    price => $self->{_last_sh_prev}->{price},
-                    meta  => { internal => $internal, source => 'EQH' },
-                };
-            }
-        }
-    }
-    if (defined $self->{_last_sl} && defined $self->{_last_sl_prev}) {
-        my $atr = $self->_get_atr_at($index) // 0;
-        my $tol = $atr * $self->{tol_factor};
-        if (abs($self->{_last_sl}->{price} - $self->{_last_sl_prev}->{price}) <= $tol) {
-            my $sig = "zone_1:$self->{_last_sl_prev}->{index}:$self->{_last_sl_prev}->{price}";
-            if (!$seen->{$sig}) {
-                $seen->{$sig} = 1;
-                push @new_zones, {
-                    index => $self->{_last_sl_prev}->{index},
-                    type  => 'zone_1',
-                    price => $self->{_last_sl_prev}->{price},
-                    meta  => { internal => $internal, source => 'EQL' },
-                };
-            }
+    # Zone 1: EQH/EQL levels from _levels
+    for my $lvl (@{ $self->{_levels} }) {
+        next unless $lvl->{type} eq 'EQH' || $lvl->{type} eq 'EQL';
+        my $sig = "zone_1:$lvl->{index}:$lvl->{price}";
+        if (!$seen->{$sig}) {
+            $seen->{$sig} = 1;
+            push @new_zones, {
+                index => $lvl->{index},
+                type  => 'zone_1',
+                price => $lvl->{price},
+                meta  => { internal => $internal, source => $lvl->{type} },
+            };
         }
     }
 
