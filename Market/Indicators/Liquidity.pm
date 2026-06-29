@@ -30,7 +30,7 @@ use Time::Moment;
 
 sub new {
     my ($class, %opts) = @_;
-    my $k         = $opts{k}         // 3;
+    my $k         = $opts{k}         // 1;
     my $atr_period= $opts{atr_period}// 14;
     my $tol_factor= $opts{tol_factor}// 0.10;
     my $N         = $opts{N}         // 3;

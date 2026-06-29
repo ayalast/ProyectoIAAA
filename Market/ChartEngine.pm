@@ -126,7 +126,7 @@ sub new {
     # spec 0005 / task 0012: overlay Liquidity. Consume el indicador de cálculo
     # (capa Indicators). Mismo patrón que SMC: alimentación incremental en render
     # hasta el tope efectivo (respeta replay_idx); el overlay solo lee.
-    $self->{liq_indicator} = Market::Indicators::Liquidity->new(k => 3);
+    $self->{liq_indicator} = Market::Indicators::Liquidity->new(k => 1);
     $self->{liq_overlay} = Market::Overlays::Liquidity->new(
         indicator => $self->{liq_indicator},
         theme     => $self->{theme},
