@@ -118,12 +118,13 @@ sub compute_visible {
 
     my $levels = $ind->can('get_levels') ? $ind->get_levels() : [];
     my $events = $ind->can('get_events') ? $ind->get_events() : [];
-    # spec 0018c: tope de recencia (como TradingView SMC). En vistas amplias el
-    # rango visible tiene cientos de niveles; mostrarlos todos apila bandas BSL/SSL
-    # ilegibles. Mantenemos los N niveles/eventos más recientes por índice. Cap
-    # generoso para no afectar tests (que usan pocos items).
-    $self->{_levels} = _recent(_window_filter($levels, $start, $end), 12);
-    $self->{_events} = _recent(_window_filter($events, $start, $end), 10);
+    
+    # Nivel de liquidez se dibuja horizontalmente; se mantiene mientras esté en pantalla
+    my $filtered_levels = _levels_window_filter($levels, $start, $end);
+    $self->{_levels} = _recent($filtered_levels, 40);
+    
+    # Eventos son etiquetas en el punto de ruptura, usamos filtro estándar
+    $self->{_events} = _recent(_window_filter($events, $start, $end), 30);
 
     return $self;
 }
@@ -135,6 +136,27 @@ sub _recent {
     my @sorted = sort { ($b->{index} // 0) <=> ($a->{index} // 0) } @$items;
     my @keep = @sorted[0 .. $n - 1];
     return [ sort { ($a->{index} // 0) <=> ($b->{index} // 0) } @keep ];
+}
+
+# Filtra niveles de liquidez según solapamiento con la ventana visible.
+sub _levels_window_filter {
+    my ($levels, $start, $end) = @_;
+    return [] unless defined $levels;
+    my @filtered;
+    for my $lvl (@$levels) {
+        next unless defined $lvl->{index};
+        
+        # El nivel debe iniciar antes o durante la ventana actual
+        next if $lvl->{index} > $end;
+        
+        # Si fue barrido, su final debe ser en o después del inicio de la ventana
+        if (defined $lvl->{swept_index}) {
+            next if $lvl->{swept_index} < $start;
+        }
+        
+        push @filtered, $lvl;
+    }
+    return \@filtered;
 }
 
 # Filtra items por index dentro de [start, end]. Un item sin index se descarta.

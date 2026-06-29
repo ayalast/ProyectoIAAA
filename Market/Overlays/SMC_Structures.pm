@@ -91,16 +91,16 @@ sub compute_visible {
 
     my $ind = defined $indicator ? $indicator : $self->{indicator};
 
-    # spec 0018c: tope de recencia. En vistas amplias (mensual) el rango visible
-    # abarca cientos de velas; dibujar TODOS los pivotes/eventos amontona etiquetas
-    # ilegibles. Como TradingView SMC, mostramos solo la estructura RECIENTE: los
-    # N items más recientes (por índice) de cada familia. major/fib ya están
-    # acotados (<=2 y 5). Cap generoso para no afectar tests (que usan pocos items).
-    $self->{_pivots} = _recent(_window_filter($ind->get_pivots(),   $start, $end), 14);
-    $self->{_events} = _recent(_window_filter($ind->get_events(),   $start, $end), 10);
-    $self->{_fvgs}   = _recent(_window_filter($ind->get_fvg(),      $start, $end), 8);
-    $self->{_fibs}   = _window_filter($ind->get_fibonacci(),$start, $end);
-    $self->{_major}  = _window_filter($ind->get_major(),    $start, $end);
+    # Pivotes y eventos son etiquetas locales o líneas acotadas, así que window_filter es correcto.
+    # Aumentamos los topes de recencia para que no desaparezcan al alejar el zoom.
+    $self->{_pivots} = _recent(_window_filter($ind->get_pivots(),   $start, $end), 40);
+    $self->{_events} = _recent(_window_filter($ind->get_events(),   $start, $end), 30);
+    
+    # FVG, Fib y Major son líneas horizontales o cajas que se extienden al infinito o hasta mitigación,
+    # por lo que deben mostrarse si empezaron en cualquier índice <= $end (aunque start_index esté off-screen).
+    $self->{_fvgs}   = _recent([ grep { $_->{index} <= $end } @{$ind->get_fvg()} ], 25);
+    $self->{_fibs}   = [ grep { $_->{index} <= $end } @{$ind->get_fibonacci()} ];
+    $self->{_major}  = [ grep { $_->{index} <= $end } @{$ind->get_major()} ];
 
     return $self;
 }
