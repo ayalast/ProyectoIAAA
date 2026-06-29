@@ -1,0 +1,71 @@
+// This work is licensed under a Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0) https://creativecommons.org/licenses/by-nc-sa/4.0/
+// © LuxAlgo
+
+//@version=5
+indicator('Smart Money Concepts [LuxAlgo]', 'LuxAlgo - Smart Money Concepts', overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500)
+//---------------------------------------------------------------------------------------------------------------------}
+//CONSTANTS & STRINGS & INPUTS
+//---------------------------------------------------------------------------------------------------------------------{
+BULLISH_LEG                     = 1
+BEARISH_LEG                     = 0
+
+BULLISH                         = +1
+BEARISH                         = -1
+
+// ... (EQH/EQL relevant inputs)
+// equalHighsLowsLengthInput    = input.int(3, 'Bars Confirmation', minval = 1)
+// equalHighsLowsThresholdInput = input.float(0.1, 'Threshold', minval = 0, maxval = 0.5, step = 0.1)
+// atrMeasure                   = ta.atr(200)
+
+//---------------------------------------------------------------------------------------------------------------------}
+//USER-DEFINED FUNCTIONS (clave para EQH/EQL y estructura)
+//---------------------------------------------------------------------------------------------------------------------{
+// leg: estado que alterna BULLISH_LEG/BEARISH_LEG. Detecta pivote mirando size barras atras.
+leg(int size) =>
+    var leg     = 0
+    newLegHigh  = high[size] > ta.highest( size)
+    newLegLow   = low[size]  < ta.lowest(  size)
+    if newLegHigh
+        leg := BEARISH_LEG
+    else if newLegLow
+        leg := BULLISH_LEG
+    leg
+
+startOfNewLeg(int leg)      => ta.change(leg) != 0
+startOfBearishLeg(int leg)  => ta.change(leg) == -1
+startOfBullishLeg(int leg)  => ta.change(leg) == +1
+
+// getCurrentStructure con equalHighLow=true usa size = equalHighsLowsLengthInput (3),
+// y compara el pivote nuevo contra el anterior usando atr(200)*threshold.
+getCurrentStructure(int size,bool equalHighLow = false, bool internal = false) =>
+    currentLeg              = leg(size)
+    newPivot                = startOfNewLeg(currentLeg)
+    pivotLow                = startOfBullishLeg(currentLeg)
+    pivotHigh               = startOfBearishLeg(currentLeg)
+    if newPivot
+        if pivotLow
+            pivot p_ivot    = equalHighLow ? equalLow : internal ? internalLow : swingLow
+            if equalHighLow and math.abs(p_ivot.currentLevel - low[size]) < equalHighsLowsThresholdInput * atrMeasure
+                drawEqualHighLow(p_ivot, low[size], size, false)   // EQL
+            p_ivot.lastLevel    := p_ivot.currentLevel
+            p_ivot.currentLevel := low[size]
+            p_ivot.barTime      := time[size]
+            p_ivot.barIndex     := bar_index[size]
+        else
+            pivot p_ivot = equalHighLow ? equalHigh : internal ? internalHigh : swingHigh
+            if equalHighLow and math.abs(p_ivot.currentLevel - high[size]) < equalHighsLowsThresholdInput * atrMeasure
+                drawEqualHighLow(p_ivot,high[size],size,true)      // EQH
+            p_ivot.lastLevel    := p_ivot.currentLevel
+            p_ivot.currentLevel := high[size]
+            p_ivot.barTime      := time[size]
+            p_ivot.barIndex     := bar_index[size]
+
+// Llamadas:
+//   getCurrentStructure(swingsLengthInput, false)       // swing structure (size=50)
+//   getCurrentStructure(5, false, true)                 // internal structure (size=5)
+//   getCurrentStructure(equalHighsLowsLengthInput, true)// EQH/EQL (size=3)
+
+// NOTA: El archivo completo original lo pasó el usuario en el chat (ver historial).
+// Aqui se conservan SOLO las partes relevantes a EQH/EQL y deteccion de pivotes (leg)
+// para usar como referencia de paridad con nuestra app.
+//---------------------------------------------------------------------------------------------------------------------}

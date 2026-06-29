@@ -28,55 +28,55 @@ sub levels_of_type {
 }
 
 # =============================================================================
-# 1. EQH: dos swing highs dentro de ATR*0.10 → emite EQH
+# 1. EQH: paridad LuxAlgo — pivotes "leg" alternados, dos altos iguales → EQH
 # =============================================================================
-# k=1, atr_period=4. Fixture con highs casi iguales en índices 1 y 3.
-# Velas:
-#   0: [10,11,10,11]   (high=11)
-#   1: [11,15,11,15]   (SH: 15>11,15>12)
-#   2: [13,12,12,12]   (high=12)
-#   3: [12,15.1,12,15] (SH: 15.1>12,15.1>14)
-#   4: [14,14,13,14]   (high=14)
-# ATR en idx 3: con k=1, atr_period=4...
-# TR values: idx0=1, idx1=4, idx2=3, idx3=3
-# ATR seed at idx3 = (1+4+3+3)/4 = 2.75
-# tol = 2.75 * 0.10 = 0.275
-# abs(15.1 - 15) = 0.1 <= 0.275 → EQH
+# EQH/EQL usan la FSM "leg" de LuxAlgo (eqhl_size propio, tol = ATR*tol_factor).
+# leg alterna obligatoriamente high<->low. Con eqhl_size=1 el pivote candidato
+# es la barra i-1. Dos pivotes altos iguales (15,15) separados por un pivote bajo
+# producen un par EQH.
 {
     my @c = (
-        [10, 11, 10, 11],
-        [11, 15, 11, 15],
-        [13, 12, 12, 12],
-        [12, 15.1, 12, 15],
-        [14, 14, 13, 14],
+        [10,12, 8,10],   # 0
+        [10,13, 9,11],   # 1
+        [14,15,14,15],   # 2: pivote HIGH @2 = 15
+        [13,13, 7, 8],   # 3: pivote LOW
+        [ 9,10, 9,10],   # 4
+        [14,15,14,15],   # 5: pivote HIGH @5 = 15 → EQH par (2,5)
+        [11,11, 6, 7],   # 6
+        [ 8, 9, 8, 9],   # 7
     );
     my $md  = build_ohlc(\@c);
-    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 4);
+    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 4,
+                                                 eqhl_size => 1, eqhl_atr_period => 20);
     $liq->update_last($md, $_) for 0 .. $md->last_index;
     my $levels = $liq->get_levels();
 
     my @eqh = levels_of_type($levels, 'EQH');
     is(scalar(@eqh), 2, 'EQH: dos items EQH (par emparejado)');
-    is($eqh[0]->{index}, 1, 'EQH: primer item index=1');
+    is($eqh[0]->{index}, 2, 'EQH: primer item index=2');
     is($eqh[0]->{price}, 15, 'EQH: primer item price=15');
-    is($eqh[1]->{index}, 3, 'EQH: segundo item index=3');
-    ok(abs($eqh[1]->{price} - 15.1) < 0.001, 'EQH: segundo item price=15.1');
+    is($eqh[1]->{index}, 5, 'EQH: segundo item index=5');
+    is($eqh[1]->{price}, 15, 'EQH: segundo item price=15');
 }
 
 # =============================================================================
-# 2. NO EQH: dos swing highs fuera de tolerancia → NO emite EQH
+# 2. NO EQH: segundo pivote alto fuera de tolerancia → NO emite EQH
 # =============================================================================
-# Mismas velas pero highs separados por 2 (15 vs 17), tol=0.275 → no EQH.
+# Mismo patron pero el segundo pivote alto es 20: |15-20|=5 > tol → no EQH.
 {
     my @c = (
-        [10, 11, 10, 11],
-        [11, 15, 11, 15],
-        [13, 12, 12, 12],
-        [12, 17, 12, 17],
-        [14, 14, 13, 14],
+        [10,12, 8,10],
+        [10,13, 9,11],
+        [14,15,14,15],
+        [13,13, 7, 8],
+        [ 9,10, 9,10],
+        [18,20,18,20],
+        [11,11, 6, 7],
+        [ 8, 9, 8, 9],
     );
     my $md  = build_ohlc(\@c);
-    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 4);
+    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 4,
+                                                 eqhl_size => 1, eqhl_atr_period => 20);
     $liq->update_last($md, $_) for 0 .. $md->last_index;
     my $levels = $liq->get_levels();
 
@@ -143,40 +143,32 @@ sub levels_of_type {
 }
 
 # =============================================================================
-# 5. EQL: dos swing lows dentro de tolerancia → emite EQL
+# 5. EQL: paridad LuxAlgo — pivotes "leg" alternados, dos bajos iguales → EQL
 # =============================================================================
-# Lows casi iguales: 10.0 y 10.1. Con ATR pequeño y tol small.
+# Dos pivotes bajos iguales (7,7) separados por un pivote alto → par EQL.
 {
-    my @c = (
-        [12, 13, 12, 13],
-        [13, 14, 10, 11],
-        [11, 12, 11, 12],
-        [12, 13, 10.1, 11],
-        [ 9, 10,  9, 10],
-        [10, 11, 11, 11],
-    );
-    # k=1: SL en idx=1 (low=10, 10<12,10<11), SL en idx=3 (low=10.1, 10.1<11,10.1<9? No, 10.1>9!)
-    # Need idx 4 low < idx3 low. Let me redesign:
-    # idx3 SL: low=10.1, need low[k-1]=low[2]=11>10.1 ✓, low[k+1]=low[4] must be >10.1
     my @c2 = (
-        [12, 13, 12, 13],    # 0
-        [13, 14, 10, 11],    # 1: SL (10<12,10<11)
-        [11, 12, 11, 12],    # 2
-        [12, 13, 10.1, 11],  # 3: SL (10.1<11,10.1<11)
-        [11, 12, 11, 12],    # 4: low=11>10.1 ✓
-        [10, 11, 10, 11],    # 5
+        [12,14,12,13],   # 0
+        [11,12, 7, 8],   # 1: pivote LOW @1 = 7
+        [ 9,12, 9,11],   # 2
+        [13,16,13,15],   # 3: pivote HIGH
+        [12,13,12,12],   # 4
+        [10,11, 7, 8],   # 5: pivote LOW @5 = 7 → EQL par (1,5)
+        [12,14,12,13],   # 6
+        [14,15,14,15],   # 7
     );
     my $md  = build_ohlc(\@c2);
-    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 3);
+    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 3,
+                                                 eqhl_size => 1, eqhl_atr_period => 20);
     $liq->update_last($md, $_) for 0 .. $md->last_index;
     my $levels = $liq->get_levels();
 
     my @eql = levels_of_type($levels, 'EQL');
     is(scalar(@eql), 2, 'EQL: dos items EQL (par emparejado)');
     is($eql[0]->{index}, 1, 'EQL: primer item index=1');
-    is($eql[0]->{price}, 10, 'EQL: primer item price=10');
-    is($eql[1]->{index}, 3, 'EQL: segundo item index=3');
-    ok(abs($eql[1]->{price} - 10.1) < 0.001, 'EQL: segundo item price=10.1');
+    is($eql[0]->{price}, 7, 'EQL: primer item price=7');
+    is($eql[1]->{index}, 5, 'EQL: segundo item index=5');
+    is($eql[1]->{price}, 7, 'EQL: segundo item price=7');
 }
 
 # =============================================================================
@@ -184,14 +176,18 @@ sub levels_of_type {
 # =============================================================================
 {
     my @c = (
-        [10, 11, 10, 11],
-        [11, 15, 11, 15],
-        [13, 12, 12, 12],
-        [12, 15.1, 12, 15],
-        [14, 14, 13, 14],
+        [10,12, 8,10],
+        [10,13, 9,11],
+        [14,15,14,15],
+        [13,13, 7, 8],
+        [ 9,10, 9,10],
+        [14,15,14,15],
+        [11,11, 6, 7],
+        [ 8, 9, 8, 9],
     );
     my $md  = build_ohlc(\@c);
-    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 4);
+    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 4,
+                                                 eqhl_size => 1, eqhl_atr_period => 20);
     $liq->update_last($md, $_) for 0 .. $md->last_index;
     my $levels = $liq->get_levels();
 
@@ -250,36 +246,37 @@ sub levels_of_type {
 }
 
 # =============================================================================
-# 9. Tolerancia dinámica: ATR*0.10 se adapta a la volatilidad
+# 9. Tolerancia dinámica: ATR*tol_factor se adapta a la volatilidad
 # =============================================================================
-# Con velas muy volátiles (TR grande), tol es mayor → empareja highs más separados.
+# Pivotes altos 15 y 16 (diff=1). Con tol_factor grande se emparejan; con
+# tol_factor diminuto, no.
 {
-    # Velas con TR grande: highs en 15 y 16, ATR grande → tol = 2.0*0.10=0.2 → diff=1 > 0.2 → no EQH
-    # Pero si velas tienen TR pequeño, tol pequeño también.
-    # Verificar que tol cambia con ATR: usar tol_factor configurable.
     my @c = (
-        [10, 11, 10, 11],
-        [11, 15, 11, 15],
-        [13, 12, 12, 12],
-        [12, 16, 12, 16],
-        [14, 14, 13, 14],
+        [10,12, 8,10],
+        [10,13, 9,11],
+        [14,15,14,15],   # pivote HIGH=15
+        [13,13, 7, 8],
+        [ 9,10, 9,10],
+        [15,16,15,16],   # pivote HIGH=16 (diff=1)
+        [11,11, 6, 7],
+        [ 8, 9, 8, 9],
     );
     my $md  = build_ohlc(\@c);
-    # Con tol_factor=1.0 (muy permisivo) → diff=1, ATR seed=(1+4+3+4)/4=3, tol=3*1.0=3 → EQH
-    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 4, tol_factor => 1.0);
+    # tol_factor=1.0 (permisivo) → diff=1 < tol → EQH
+    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 4,
+                                                 eqhl_size => 1, eqhl_atr_period => 20,
+                                                 tol_factor => 1.0);
     $liq->update_last($md, $_) for 0 .. $md->last_index;
-    my $levels = $liq->get_levels();
+    my @eqh = levels_of_type($liq->get_levels(), 'EQH');
+    is(scalar(@eqh), 2, 'tol dinámica: con tol_factor=1.0, diff=1 < tol → EQH');
 
-    my @eqh = levels_of_type($levels, 'EQH');
-    is(scalar(@eqh), 2, 'tol dinámica: con tol_factor=1.0, diff=1 <= tol=3 → EQH');
-
-    # Con tol_factor=0.01 (muy estricto) → tol=0.03 → diff=1 > 0.03 → no EQH
-    my $liq2 = Market::Indicators::Liquidity->new(k => 1, atr_period => 4, tol_factor => 0.01);
+    # tol_factor=0.01 (estricto) → tol diminuto → no EQH
+    my $liq2 = Market::Indicators::Liquidity->new(k => 1, atr_period => 4,
+                                                  eqhl_size => 1, eqhl_atr_period => 20,
+                                                  tol_factor => 0.01);
     $liq2->update_last($md, $_) for 0 .. $md->last_index;
-    my $levels2 = $liq2->get_levels();
-
-    my @eqh2 = levels_of_type($levels2, 'EQH');
-    is(scalar(@eqh2), 0, 'tol dinámica: con tol_factor=0.01, diff=1 > tol=0.03 → no EQH');
+    my @eqh2 = levels_of_type($liq2->get_levels(), 'EQH');
+    is(scalar(@eqh2), 0, 'tol dinámica: con tol_factor=0.01, diff=1 > tol → no EQH');
 }
 
 # =============================================================================
@@ -638,19 +635,20 @@ sub build_ohlc_vol {
 # --- 21. 7 zonas: zone_1..zone_7 se detectan y exponen ---
 {
     my @c = (
-        [10, 11, 10, 11, 5],   # 0
-        [11, 15, 11, 15, 10],  # 1: SH
-        [13, 12, 12, 12, 20],  # 2
-        [12, 15.1, 12, 15.1, 30],  # 3: SH → BSL@1
-        [14, 14, 13, 14, 40],  # 4
-        [14, 17, 14, 16, 50],  # 5: Swept
-        [16, 16, 15, 16, 60],  # 6
-        [16, 16, 15, 16, 70],  # 7: RUN
+        [10,12, 8,10, 5],   # 0
+        [10,13, 9,11,10],   # 1
+        [14,15,14,15,20],   # 2: pivote HIGH=15
+        [13,13, 7, 8,30],   # 3: pivote LOW
+        [ 9,10, 9,10,40],   # 4
+        [14,15,14,15,50],   # 5: pivote HIGH=15 → EQH par (zone_1)
+        [11,11, 6, 7,60],   # 6: pivote LOW
+        [ 8, 9, 8, 9,70],   # 7
     );
     my $md  = build_ohlc_vol(\@c);
     $md->build_tf_candles('D');
     $md->build_tf_candles('W');
-    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 3, N => 3);
+    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 3, N => 3,
+                                                 eqhl_size => 1, eqhl_atr_period => 20);
     $liq->update_last($md, $_) for 0 .. $md->last_index;
     my $zones = $liq->get_zones();
 
@@ -909,32 +907,35 @@ sub build_ohlc_vol {
 # TASK 0022 (Regresiones): get_active_levels EQH/EQL filtering
 # =============================================================================
 {
-    # Si tenemos un par EQH, y luego uno de ellos es barrido/resuelto,
-    # get_active_levels() debe omitir ese EQH del par barrido porque ya no está activo.
+    # Par EQH (altos iguales ~15) detectado por la FSM "leg". Mientras el precio
+    # cierra por debajo del nivel, el EQH sigue activo; cuando el precio cierra
+    # por encima, deja de estar activo.
     my @c = (
-        [10, 11, 10, 11],   # 0
-        [11, 15, 11, 15],   # 1: SH (HH=15) -> genera BSL@1 (price=15)
-        [13, 12, 12, 12],   # 2
-        [12, 15, 12, 15],   # 3: SH (HH=15) -> genera EQH@1 y EQH@3 (price=15)
-        [14, 14, 13, 14],   # 4
-        [14, 17, 14, 16],   # 5: close=16 > 15 -> Swept.
-        [16, 17, 16, 17],   # 6
-        [17, 18, 17, 18],   # 7
+        [10,12, 8,10],   # 0
+        [10,13, 9,11],   # 1
+        [14,15,14,15],   # 2: pivote HIGH=15
+        [13,13, 7, 8],   # 3: pivote LOW
+        [ 9,10, 9,10],   # 4
+        [14,15,14,15],   # 5: pivote HIGH=15 → EQH par (2,5)
+        [11,11, 6, 7],   # 6: pivote LOW
+        [ 8,12, 8,11],   # 7: close=11 < 15 → EQH activo
+        [12,20,12,19],   # 8: close=19 > 15 → EQH inactivo
     );
     my $md  = build_ohlc(\@c);
-    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 3, N => 3);
-    
-    # Alimentamos hasta index 4 (antes de romper el nivel): EQH debe estar activo.
-    $liq->update_last($md, $_) for 0 .. 4;
+    my $liq = Market::Indicators::Liquidity->new(k => 1, atr_period => 3, N => 3,
+                                                 eqhl_size => 1, eqhl_atr_period => 20);
+
+    # Alimentamos hasta index 7 (precio por debajo del nivel): EQH activo.
+    $liq->update_last($md, $_) for 0 .. 7;
     my $active_before = $liq->get_active_levels();
     my @eqh_before = grep { $_->{type} eq 'EQH' } @$active_before;
-    is(scalar(@eqh_before), 2, 'active levels: EQH activo antes de ser barrido (2 items)');
+    is(scalar(@eqh_before), 2, 'active levels: EQH activo mientras precio < nivel (2 items)');
 
-    # Alimentamos todo (se barre y resuelve la liquidez en index 5): EQH debe desaparecer de activos.
-    $liq->update_last($md, $_) for 5 .. $md->last_index;
+    # Alimentamos la vela 8 (close por encima del nivel): EQH deja de estar activo.
+    $liq->update_last($md, 8);
     my $active_after = $liq->get_active_levels();
     my @eqh_after = grep { $_->{type} eq 'EQH' } @$active_after;
-    is(scalar(@eqh_after), 0, 'active levels: EQH inactivo/barrido después de la ruptura (0 items)');
+    is(scalar(@eqh_after), 0, 'active levels: EQH inactivo tras cierre por encima (0 items)');
 }
 
 done_testing();

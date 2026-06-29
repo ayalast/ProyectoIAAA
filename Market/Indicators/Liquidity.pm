@@ -34,18 +34,40 @@ sub new {
     my $atr_period= $opts{atr_period}// 14;
     my $tol_factor= $opts{tol_factor}// 0.10;
     my $N         = $opts{N}         // 3;
+    # EQH/EQL (paridad LuxAlgo): deteccion de pivotes por "leg" con tamano propio
+    # (equalHighsLowsLengthInput=3) y tolerancia = threshold(0.1) * ta.atr(200).
+    my $eqhl_size       = $opts{eqhl_size}       // 3;
+    my $eqhl_atr_period = $opts{eqhl_atr_period} // 200;
     die "Liquidity: k must be a positive integer"
         unless defined $k && $k =~ /^\d+$/ && $k > 0;
     die "Liquidity: atr_period must be a positive integer"
         unless defined $atr_period && $atr_period =~ /^\d+$/ && $atr_period > 0;
     die "Liquidity: N must be a positive integer"
         unless defined $N && $N =~ /^\d+$/ && $N > 0;
+    die "Liquidity: eqhl_size must be a positive integer"
+        unless defined $eqhl_size && $eqhl_size =~ /^\d+$/ && $eqhl_size > 0;
+    die "Liquidity: eqhl_atr_period must be a positive integer"
+        unless defined $eqhl_atr_period && $eqhl_atr_period =~ /^\d+$/ && $eqhl_atr_period > 0;
 
     my $self = {
         k          => $k,
         atr_period => $atr_period,
         tol_factor => $tol_factor,
         N          => $N,
+        eqhl_size       => $eqhl_size,
+        eqhl_atr_period => $eqhl_atr_period,
+        # FSM "leg" de EQH/EQL (paridad LuxAlgo). leg: 0=BEARISH, 1=BULLISH.
+        _eq_leg        => 0,
+        _eq_high_level => undef,
+        _eq_high_bar   => undef,
+        _eq_high_have  => 0,
+        _eq_low_level  => undef,
+        _eq_low_bar    => undef,
+        _eq_low_have   => 0,
+        # ATR(200) propio para la tolerancia EQH/EQL (Wilder con seed de media movil).
+        _eq_tr_sum  => 0,
+        _eq_count   => 0,
+        _eq_atr_last=> undef,
         _highs     => [],
         _lows      => [],
         _closes    => [],
@@ -109,6 +131,12 @@ sub update_last {
 
     # --- ATR incremental (Wilder) ---
     $self->_update_atr($index, $high, $low, $close);
+
+    # --- ATR(200) propio para tolerancia EQH/EQL (paridad LuxAlgo) ---
+    $self->_update_eq_atr($index, $high, $low, $close);
+
+    # --- EQH/EQL: deteccion de pivotes por "leg" (paridad LuxAlgo) ---
+    $self->_update_eqhl_leg($index);
 
     # --- Swing detection at j = index - k ---
     my $k = $self->{k};
@@ -236,23 +264,6 @@ sub _process_swing_high {
     if (defined $self->{_last_sh}) {
         my $prev_price = $self->{_last_sh}->{price};
         my $prev_index = $self->{_last_sh}->{index};
-        my $atr = $self->_get_atr_at($j) // 0;
-        my $tol = $atr * $self->{tol_factor};
-        if (abs($price - $prev_price) <= $tol) {
-            my $gid = "eqh_" . $prev_index . "_" . $j;
-            push @{ $self->{_levels} }, {
-                index    => $prev_index,
-                type     => 'EQH',
-                price    => $prev_price,
-                group_id => $gid,
-            };
-            push @{ $self->{_levels} }, {
-                index    => $j,
-                type     => 'EQH',
-                price    => $price,
-                group_id => $gid,
-            };
-        }
 
         # BSL: liquidez por encima del swing high previo
         my $lvl = {
@@ -276,23 +287,6 @@ sub _process_swing_low {
     if (defined $self->{_last_sl}) {
         my $prev_price = $self->{_last_sl}->{price};
         my $prev_index = $self->{_last_sl}->{index};
-        my $atr = $self->_get_atr_at($j) // 0;
-        my $tol = $atr * $self->{tol_factor};
-        if (abs($price - $prev_price) <= $tol) {
-            my $gid = "eql_" . $prev_index . "_" . $j;
-            push @{ $self->{_levels} }, {
-                index    => $prev_index,
-                type     => 'EQL',
-                price    => $prev_price,
-                group_id => $gid,
-            };
-            push @{ $self->{_levels} }, {
-                index    => $j,
-                type     => 'EQL',
-                price    => $price,
-                group_id => $gid,
-            };
-        }
 
         # SSL: liquidez por debajo del swing low previo
         my $lvl = {
@@ -306,6 +300,130 @@ sub _process_swing_low {
 
     $self->{_last_sl_prev} = $self->{_last_sl};
     $self->{_last_sl}      = { index => $j, price => $price };
+    return;
+}
+
+# =============================================================================
+# EQH/EQL — paridad LuxAlgo (getCurrentStructure(size=3, equalHighLow=true))
+# =============================================================================
+# LuxAlgo detecta los pivotes de EQH/EQL con una FSM "leg" independiente del
+# fractal usado para BSL/SSL:
+#
+#   leg(size):
+#     newLegHigh = high[i-size] > highest(high, i-size+1 .. i)
+#     newLegLow  = low[i-size]  < lowest(low,  i-size+1 .. i)
+#     if newLegHigh -> leg = BEARISH(0)
+#     elif newLegLow -> leg = BULLISH(1)
+#
+#   Cuando leg cambia 1->0 (startOfBearishLeg): pivote ALTO en bar (i-size),
+#     precio high[i-size]. Si |prevEqualHigh - price| < tol -> EQH.
+#   Cuando leg cambia 0->1 (startOfBullishLeg): pivote BAJO en bar (i-size),
+#     precio low[i-size].  Si |prevEqualLow - price| < tol -> EQL.
+#
+#   tol = threshold(tol_factor, def 0.1) * atr(eqhl_atr_period, def 200).
+#
+# Esta deteccion alterna obligatoriamente high<->low (a diferencia del fractal),
+# por eso captura pares EQH/EQL que el fractal estricto omite.
+sub _update_eqhl_leg {
+    my ($self, $index) = @_;
+    my $size = $self->{eqhl_size};
+    my $piv  = $index - $size;
+    return if $piv < 0;
+
+    my $H = $self->{_highs};
+    my $L = $self->{_lows};
+    my $hk = $H->[$piv];
+    my $lk = $L->[$piv];
+    return unless defined $hk && defined $lk;
+
+    # highest/lowest sobre la ventana [i-size+1 .. i] (size barras, incl. actual).
+    my ($mh, $ml);
+    for my $jj ($index - $size + 1 .. $index) {
+        my $h = $H->[$jj];
+        my $l = $L->[$jj];
+        next unless defined $h && defined $l;
+        $mh = $h if !defined $mh || $h > $mh;
+        $ml = $l if !defined $ml || $l < $ml;
+    }
+    return unless defined $mh && defined $ml;
+
+    my $prev_leg = $self->{_eq_leg};
+    if    ($hk > $mh) { $self->{_eq_leg} = 0; }  # BEARISH_LEG
+    elsif ($lk < $ml) { $self->{_eq_leg} = 1; }  # BULLISH_LEG
+    my $leg = $self->{_eq_leg};
+    return if $leg == $prev_leg;  # solo en el cambio de leg
+
+    my $atr = $self->{_eq_atr_last};
+    my $tol = (defined $atr ? $atr : 0) * $self->{tol_factor};
+
+    if ($leg == 0) {
+        # Pivote alto confirmado en bar $piv (precio $hk).
+        if ($self->{_eq_high_have} && defined $tol
+            && abs($self->{_eq_high_level} - $hk) < $tol) {
+            my $gid = "eqh_" . $self->{_eq_high_bar} . "_" . $piv;
+            push @{ $self->{_levels} }, {
+                index => $self->{_eq_high_bar}, type => 'EQH',
+                price => $self->{_eq_high_level}, group_id => $gid,
+            };
+            push @{ $self->{_levels} }, {
+                index => $piv, type => 'EQH', price => $hk, group_id => $gid,
+            };
+        }
+        $self->{_eq_high_level} = $hk;
+        $self->{_eq_high_bar}   = $piv;
+        $self->{_eq_high_have}  = 1;
+    } else {
+        # Pivote bajo confirmado en bar $piv (precio $lk).
+        if ($self->{_eq_low_have} && defined $tol
+            && abs($self->{_eq_low_level} - $lk) < $tol) {
+            my $gid = "eql_" . $self->{_eq_low_bar} . "_" . $piv;
+            push @{ $self->{_levels} }, {
+                index => $self->{_eq_low_bar}, type => 'EQL',
+                price => $self->{_eq_low_level}, group_id => $gid,
+            };
+            push @{ $self->{_levels} }, {
+                index => $piv, type => 'EQL', price => $lk, group_id => $gid,
+            };
+        }
+        $self->{_eq_low_level} = $lk;
+        $self->{_eq_low_bar}   = $piv;
+        $self->{_eq_low_have}  = 1;
+    }
+    return;
+}
+
+# ATR para la tolerancia EQH/EQL. Wilder con seed por media movil de los TR
+# disponibles (asi hay tolerancia antes de completar el periodo, util porque
+# nuestro CSV es corto frente al historial que tiene TradingView).
+sub _update_eq_atr {
+    my ($self, $index, $high, $low, $close) = @_;
+    my $period = $self->{eqhl_atr_period};
+
+    my $tr;
+    if (defined $self->{_eq_last_close}) {
+        my $prev = $self->{_eq_last_close};
+        my $hl  = $high - $low;
+        my $hpc = abs($high - $prev);
+        my $lpc = abs($low  - $prev);
+        $tr = $hl;
+        $tr = $hpc if $hpc > $tr;
+        $tr = $lpc if $lpc > $tr;
+    } else {
+        $tr = $high - $low;
+    }
+
+    $self->{_eq_count}++;
+    if ($self->{_eq_count} < $period) {
+        $self->{_eq_tr_sum} += $tr;
+        $self->{_eq_atr_last} = $self->{_eq_tr_sum} / $self->{_eq_count};
+    } elsif ($self->{_eq_count} == $period) {
+        $self->{_eq_tr_sum} += $tr;
+        $self->{_eq_atr_last} = $self->{_eq_tr_sum} / $period;
+    } else {
+        $self->{_eq_atr_last} =
+            ($self->{_eq_atr_last} * ($period - 1) + $tr) / $period;
+    }
+    $self->{_eq_last_close} = $close;
     return;
 }
 
@@ -882,47 +1000,18 @@ sub get_active_levels {
         $active_indices{SSL}{$self->{_last_sl}->{index}} = 1;
     }
 
-    # 3. Agrupar EQH/EQL de _levels por tipo y precio para comprobar co-actividad
-    my %eq_groups;
-    for my $lvl (@{ $self->{_levels} }) {
-        next unless $lvl->{type} eq 'EQH' || $lvl->{type} eq 'EQL';
-        push @{ $eq_groups{$lvl->{type}}{$lvl->{price}} }, $lvl->{index};
-    }
-
-    # 4. Retornar EQH/EQL si todos sus componentes del grupo siguen activos
+    # 3. EQH/EQL (paridad LuxAlgo): vienen de la FSM "leg", con indices propios
+    #    desacoplados de los pivotes fractales de BSL/SSL. Un nivel de liquidez
+    #    por encima del precio (EQH) sigue "activo" hasta que el precio cierra a
+    #    traves de el; idem EQL por debajo. Usamos el ultimo close alimentado.
+    my $last_close = $self->{_eq_last_close};
     for my $lvl (@{ $self->{_levels} }) {
         if ($lvl->{type} eq 'EQH') {
-            my $grp = $eq_groups{EQH}{$lvl->{price}};
-            my $all_active = 1;
-            if (defined $grp) {
-                for my $idx (@$grp) {
-                    if (!$active_indices{BSL}{$idx}) {
-                        $all_active = 0;
-                        last;
-                    }
-                }
-            } else {
-                $all_active = $active_indices{BSL}{$lvl->{index}};
-            }
-            if ($all_active) {
-                push @result, $lvl;
-            }
+            next if defined $last_close && $last_close > $lvl->{price};
+            push @result, $lvl;
         } elsif ($lvl->{type} eq 'EQL') {
-            my $grp = $eq_groups{EQL}{$lvl->{price}};
-            my $all_active = 1;
-            if (defined $grp) {
-                for my $idx (@$grp) {
-                    if (!$active_indices{SSL}{$idx}) {
-                        $all_active = 0;
-                        last;
-                    }
-                }
-            } else {
-                $all_active = $active_indices{SSL}{$lvl->{index}};
-            }
-            if ($all_active) {
-                push @result, $lvl;
-            }
+            next if defined $last_close && $last_close < $lvl->{price};
+            push @result, $lvl;
         }
     }
 
@@ -955,6 +1044,18 @@ sub reset {
     $self->{_levels}     = [];
     $self->{_eqh_pairs}  = {};
     $self->{_eql_pairs}  = {};
+    # EQH/EQL leg state (paridad LuxAlgo).
+    $self->{_eq_leg}        = 0;
+    $self->{_eq_high_level} = undef;
+    $self->{_eq_high_bar}   = undef;
+    $self->{_eq_high_have}  = 0;
+    $self->{_eq_low_level}  = undef;
+    $self->{_eq_low_bar}    = undef;
+    $self->{_eq_low_have}   = 0;
+    $self->{_eq_tr_sum}     = 0;
+    $self->{_eq_count}      = 0;
+    $self->{_eq_atr_last}   = undef;
+    $self->{_eq_last_close} = undef;
     $self->{_last_sh}    = undef;
     $self->{_last_sl}    = undef;
     $self->{_last_sh_prev} = undef;
