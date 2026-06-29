@@ -724,26 +724,12 @@ sub _detect_zones {
     my $seen = $self->{_zone_seen};
     my @new_zones;
 
-    # Zone 1: EQH/EQL levels from _levels
-    for my $lvl (@{ $self->{_levels} }) {
-        next unless $lvl->{type} eq 'EQH' || $lvl->{type} eq 'EQL';
-        my $sig = "zone_1:$lvl->{index}:$lvl->{price}";
-        if (!$seen->{$sig}) {
-            $seen->{$sig} = 1;
-            push @new_zones, {
-                index => $lvl->{index},
-                type  => 'zone_1',
-                price => $lvl->{price},
-                meta  => { internal => $internal, source => $lvl->{type} },
-            };
-        }
-    }
-
-    # Zone 2: swing highs/lows (BSL/SSL levels)
-    # PERF (task 0016): scan only levels appended since the last invocation (_zone2_cursor).
-    # Each level is protected by _zone_seen, so processing a level once is equivalent to
-    # processing it every call — the zone output is byte-identical, but this makes the cost
-    # O(new_levels) instead of O(total_levels) per candle (was the dominant O(N²) cost).
+    # Zone 1 (EQH/EQL) + Zone 2 (BSL/SSL): ambas recorren _levels. PERF: un solo
+    # escaneo incremental desde el cursor (_zone2_cursor), procesando solo los
+    # niveles agregados desde la ultima invocacion. Cada nivel queda protegido por
+    # _zone_seen, asi que procesarlo una vez equivale a procesarlo siempre: la
+    # salida es identica byte a byte, pero el costo pasa de O(total_levels) por
+    # vela (O(N^2) acumulado, antes el cuello de botella dominante) a O(nuevos).
     {
         my $levels = $self->{_levels};
         my $cursor = $self->{_zone2_cursor} // 0;
@@ -751,16 +737,29 @@ sub _detect_zones {
         if ($cursor < $n) {
             for my $li ($cursor .. $n - 1) {
                 my $lvl = $levels->[$li];
-                next unless $lvl->{type} eq 'BSL' || $lvl->{type} eq 'SSL';
-                my $sig = "zone_2:$lvl->{index}:$lvl->{price}";
-                if (!$seen->{$sig}) {
-                    $seen->{$sig} = 1;
-                    push @new_zones, {
-                        index => $lvl->{index},
-                        type  => 'zone_2',
-                        price => $lvl->{price},
-                        meta  => { internal => $internal, source => $lvl->{type} },
-                    };
+                my $type = $lvl->{type};
+                if ($type eq 'EQH' || $type eq 'EQL') {
+                    my $sig = "zone_1:$lvl->{index}:$lvl->{price}";
+                    if (!$seen->{$sig}) {
+                        $seen->{$sig} = 1;
+                        push @new_zones, {
+                            index => $lvl->{index},
+                            type  => 'zone_1',
+                            price => $lvl->{price},
+                            meta  => { internal => $internal, source => $type },
+                        };
+                    }
+                } elsif ($type eq 'BSL' || $type eq 'SSL') {
+                    my $sig = "zone_2:$lvl->{index}:$lvl->{price}";
+                    if (!$seen->{$sig}) {
+                        $seen->{$sig} = 1;
+                        push @new_zones, {
+                            index => $lvl->{index},
+                            type  => 'zone_2',
+                            price => $lvl->{price},
+                            meta  => { internal => $internal, source => $type },
+                        };
+                    }
                 }
             }
             $self->{_zone2_cursor} = $n;

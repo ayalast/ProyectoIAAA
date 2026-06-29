@@ -241,15 +241,15 @@ sub _update_supply_demand {
         };
     }
 
-    # Mitigate active zones
-    for my $z (@{ $self->{_demand_zones} }) {
-        next unless $z->{active};
-        if ($close < $z->{lo}) { $z->{active} = 0; }
-    }
-    for my $z (@{ $self->{_supply_zones} }) {
-        next unless $z->{active};
-        if ($close > $z->{hi}) { $z->{active} = 0; }
-    }
+    # Mitigate active zones. PERF: _demand_zones/_supply_zones mantienen SOLO
+    # zonas activas (una zona nunca se re-activa, y get_values ya filtra por
+    # active), asi que al mitigar las eliminamos del array. Esto evita reescanear
+    # zonas muertas en cada vela (antes O(N^2) acumulado sobre arrays que solo
+    # crecen). Salida identica: get_values devuelve las mismas zonas activas.
+    @{ $self->{_demand_zones} } =
+        grep { $close >= $_->{lo} } @{ $self->{_demand_zones} };
+    @{ $self->{_supply_zones} } =
+        grep { $close <= $_->{hi} } @{ $self->{_supply_zones} };
 }
 
 sub get_values {

@@ -332,11 +332,14 @@ sub _detect_fvg {
 
 sub _mitigate_fvg {
     my ($self, $index, $high, $low) = @_;
-    for my $g (@{ $self->{_fvgs} }) {
-        next unless $g->{active};
-        if ($g->{dir} eq 'up' && $low <= $g->{bottom})  { $g->{active} = 0; }
-        if ($g->{dir} eq 'down' && $high >= $g->{top})  { $g->{active} = 0; }
-    }
+    # PERF: _fvgs mantiene SOLO gaps activos (un FVG mitigado no se reactiva y
+    # get_values ya filtra por active), asi que al mitigar lo eliminamos del
+    # array. Evita reescanear gaps muertos cada vela (antes O(N^2) acumulado).
+    # Salida identica: get_values devuelve los mismos FVG activos, en orden.
+    @{ $self->{_fvgs} } = grep {
+        !( ($_->{dir} eq 'up'   && $low  <= $_->{bottom})
+        || ($_->{dir} eq 'down' && $high >= $_->{top}) )
+    } @{ $self->{_fvgs} };
     return;
 }
 
